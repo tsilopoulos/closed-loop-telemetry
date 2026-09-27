@@ -18,7 +18,7 @@ modeling an OpAMP-managed fleet.
 - `control_plane/fleet.py` — `SimulatedFleet` (default, zero infra) and the
   seam to a real control plane: `control_plane/opamp_bridge.py` (`CTL_FLEET=opamp`).
 - `backends/adapters.py` — stubs for real metrics/traces/logs backends.
-- Shared state: SQLite at `.state/ctl.db` (delete it to reset everything).
+- Shared state: SQLite at `.state/ctl.db` (`make reset` empties it in place).
 
 ## Invariants — do not break these, they ARE the talk
 
@@ -37,7 +37,7 @@ modeling an OpAMP-managed fleet.
 make setup       # .venv + requirements-dev.txt (required by .mcp.json)
 make test        # pytest
 make demo        # trigger cardinality explosion + print fleet state
-make reset       # wipe .state/
+make reset       # empty the state DB in place (safe with a running MCP server)
 python3 -m cli.ctl list|show|approve|reject|rollback|audit|fleet
 python3 -m scenarios.trigger cardinality_explosion --service checkout
 ```
