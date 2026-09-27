@@ -359,3 +359,34 @@ def test_audit_trail_records_everything(env):
     actions = [e["action"] for e in store.audit_log(50)]
     for expected in ("rollout.start", "rollout.canary_applied", "rollout.applied"):
         assert expected in actions
+
+
+# ---------------------------------------------------------------------------
+# Shared state across processes
+
+
+@pytest.mark.parametrize("how", ["ctl_reset", "rm_rf"])
+def test_long_lived_server_survives_reset(tmp_path, how):
+    """A running MCP server's proposals must reach ctl after `make reset`."""
+    import shutil
+    db = tmp_path / "state" / "ctl.db"
+    server_store = Store(str(db))             # the long-lived MCP server
+    SimulatedFleet(server_store, size=10)
+    server_store.put_proposal({"proposal_id": "prop-old", "status": "pending_approval",
+                               "created_at": 0.0})
+    if how == "ctl_reset":
+        ctl_store = Store(str(db))
+        ctl_store.reset()
+        SimulatedFleet(ctl_store, size=10).reset()
+    else:
+        shutil.rmtree(db.parent)
+    server_store.put_proposal({"proposal_id": "prop-new", "status": "pending_approval",
+                               "created_at": 1.0})
+    seen = [p["proposal_id"] for p in Store(str(db)).list_proposals()]
+    assert seen == ["prop-new"]
+
+
+def test_fleet_rebootstraps_after_reset(env):
+    store, fleet = env
+    store.reset()
+    assert len(fleet.agents()) == 40

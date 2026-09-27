@@ -145,8 +145,16 @@ class SimulatedFleet:
 
     def __init__(self, store: Store, size: int = 60, seed: int = 7):
         self.store = store
-        if self.store.get_kv(FLEET_KEY) is None:
-            self._bootstrap(size, seed)
+        self.size, self.seed = size, seed
+        self._raw()
+
+    def _raw(self) -> dict[str, Any]:
+        """Fleet state, re-bootstrapped if the store was reset under us."""
+        raw = self.store.get_kv(FLEET_KEY)
+        if raw is None:
+            self._bootstrap(self.size, self.seed)
+            raw = self.store.get_kv(FLEET_KEY)
+        return raw
 
     # -- bootstrap ------------------------------------------------------------
 
@@ -171,17 +179,17 @@ class SimulatedFleet:
         self.store.put_kv(HISTORY_KEY, [])
         self._record()
 
-    def reset(self, size: int = 60, seed: int = 7) -> None:
-        self._bootstrap(size, seed)
+    def reset(self) -> None:
+        self._bootstrap(self.size, self.seed)
 
     # -- reads ---------------------------------------------------------------
 
     def agents(self) -> list[AgentInfo]:
-        raw = self.store.get_kv(FLEET_KEY, {})
+        raw = self._raw()
         return [AgentInfo.from_dict(a) for a in raw.values()]
 
     def get_agent(self, agent_id: str) -> AgentInfo | None:
-        raw = self.store.get_kv(FLEET_KEY, {})
+        raw = self._raw()
         return AgentInfo.from_dict(raw[agent_id]) if agent_id in raw else None
 
     def select(self, selector: dict[str, Any]) -> list[AgentInfo]:
@@ -300,7 +308,7 @@ class SimulatedFleet:
     # -- writes (only the rollout engine calls these) ---------------------------
 
     def apply_patch(self, agent_ids: list[str], patch: dict[str, Any]) -> None:
-        raw = self.store.get_kv(FLEET_KEY, {})
+        raw = self._raw()
         for aid in agent_ids:
             a = AgentInfo.from_dict(raw[aid])
             a.previous_config = copy.deepcopy(a.config)
@@ -314,7 +322,7 @@ class SimulatedFleet:
         self._record()
 
     def rollback(self, agent_ids: list[str]) -> None:
-        raw = self.store.get_kv(FLEET_KEY, {})
+        raw = self._raw()
         for aid in agent_ids:
             a = AgentInfo.from_dict(raw[aid])
             if a.previous_config is not None:
