@@ -83,6 +83,25 @@ def test_policy_rejects_exporter_changes(env):
     assert any("forbidden" in r for r in verdict.reasons)
 
 
+@pytest.mark.parametrize("patch", [
+    {"service": {"pipelines": {"metrics": {"exporters": []}}}},
+    {"service": {"pipelines": {"metrics": {"receivers": []}}}},
+    {"service": {"pipelines": {"metrics": None}}},
+    {"service": {"pipelines": None}},
+    {"service": None},
+])
+def test_policy_rejects_pipeline_rewiring(env, patch):
+    """Only pipeline *processor lists* are proposable; blackholing is not."""
+    _, verdict = _make_proposal(env, patch=patch)
+    assert not verdict.allowed
+
+
+def test_policy_allows_pipeline_processor_lists(env):
+    _, verdict = _make_proposal(env, patch={
+        "service": {"pipelines": {"logs": {"processors": ["batch"]}}}})
+    assert verdict.allowed
+
+
 def test_policy_requires_evidence(env):
     store, fleet = env
     _, verdict = _make_proposal(env, evidence=[])
@@ -204,6 +223,37 @@ def test_bad_config_auto_rolls_back(env):
 
     final = store.get_proposal(p.proposal_id)
     assert final["status"] == "rolled_back"
+
+
+def test_overbroad_filter_fails_baseline_gate(env):
+    """Dropping all of checkout's metrics shrinks series — and must still fail."""
+    store, fleet = env
+    fleet.set_scenario({"active": "cardinality_explosion",
+                        "service": "checkout", "label": "sku_id", "multiplier": 8.0})
+    patch = {
+        "processors": {"filter/drop-checkout": {"metrics": {"datapoint": [
+            'resource.attributes["service.name"] == "checkout"']}}},
+        "service": {"pipelines": {"metrics": {
+            "processors": ["batch", "filter/drop-checkout"]}}},
+    }
+    p, verdict = _make_proposal(env, patch=patch)
+    assert verdict.allowed
+    rollout = start_rollout(store, fleet, p.proposal_id, approver="human:tester")
+    assert rollout.verification["no_series_increase"] is True
+    assert rollout.verification["services_below_baseline"] == ["checkout"]
+    assert rollout.status == "rolled_back"
+
+
+def test_unwired_processor_has_no_effect(env):
+    """Defining a processor without adding it to the pipeline is a no-op."""
+    store, fleet = env
+    fleet.set_scenario({"active": "cardinality_explosion",
+                        "service": "checkout", "label": "sku_id", "multiplier": 8.0})
+    before = fleet.series_by_service()["checkout"]
+    patch = {"processors": MITIGATION_PATCH["processors"]}
+    p, _ = _make_proposal(env, patch=patch)
+    start_rollout(store, fleet, p.proposal_id, approver="human:tester")
+    assert fleet.series_by_service()["checkout"] == before
 
 
 def test_audit_trail_records_everything(env):
