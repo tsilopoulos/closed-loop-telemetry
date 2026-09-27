@@ -162,7 +162,12 @@ def validate_proposal(
                     f"remove {dropped} on matched agents (merge patch replaces lists). "
                     "Include the existing processors in the new list.")
 
-    # 4. Selector sanity: it must match something, and never a protected agent.
+    # 4. Selector sanity: explicit, matches something, never a protected agent.
+    modes = [k for k in ("labels", "agent_ids", "all") if selector.get(k)]
+    if len(modes) != 1 or set(selector) - {"labels", "agent_ids", "all"}:
+        reasons.append(
+            f"Selector {selector} must set exactly one of labels, agent_ids, or "
+            "all:true (an empty selector must never mean 'everything').")
     if not targets:
         reasons.append(f"Selector {selector} matches no agents.")
     if hit := protected_targets(targets, policy):

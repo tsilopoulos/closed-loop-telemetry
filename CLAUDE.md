@@ -23,7 +23,9 @@ modeling an OpAMP-managed fleet.
 ## Invariants — do not break these, they ARE the talk
 
 1. The MCP server must never gain a tool that applies, approves, or rolls out
-   config. `tests/test_loop.py::test_mcp_server_cannot_apply` pins this.
+   config. `tests/test_loop.py::test_mcp_server_cannot_apply` pins the exact
+   registered tool set, their `readOnlyHint` annotations, and that the server
+   never imports/calls the rollout engine.
 2. `start_rollout` must reject non-human approvers (allowlist: `human:<name>`)
    and verdicts issued under a different guardrails.yaml than the current one.
 3. Every mutation goes through the policy engine and is audit-logged.
