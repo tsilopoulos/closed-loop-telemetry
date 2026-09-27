@@ -11,7 +11,8 @@ API (e.g., the REST/gRPC surface of your control plane in front of opamp-go):
   - agents()/select()   -> fleet inventory from the OpAMP server's agent registry
   - apply_patch()       -> stage a new effective config and push
                            ServerToAgent.remote_config to the selected agents
-  - rollback()          -> re-push the previously effective config hash
+  - rollback()          -> re-push the config hash each agent had before
+                           that rollout (refuse if a newer rollout touched it)
   - series_by_service() -> PromQL against your metrics backend (see backends/)
   - recent_logs()       -> LogQL/SQL against your logs backend (see backends/)
 
@@ -46,9 +47,12 @@ class OpAMPBridge:
 
     def select(self, selector: dict[str, Any]) -> list[Any]: ...
 
-    def apply_patch(self, agent_ids: list[str], patch: dict[str, Any]) -> None: ...
+    def apply_patch(self, agent_ids: list[str], patch: dict[str, Any],
+                    rollout_id: str) -> None: ...
 
-    def rollback(self, agent_ids: list[str]) -> None: ...
+    def rollback(self, agent_ids: list[str], rollout_id: str) -> None:
+        """Re-push the config each agent had before `rollout_id`; raise
+        fleet.RollbackBlocked if a newer rollout has touched any of them."""
 
     def series_by_service(self) -> dict[str, int]: ...
 

@@ -14,7 +14,8 @@ from __future__ import annotations
 from typing import Any
 
 from .models import ConfigProposal, Rollout, new_id, now
-from .policy import canary_size, load_policy, policy_fingerprint, protected_targets
+from .fleet import RollbackBlocked
+from .policy import canary_size, load_policy, policy_fingerprint, validate_proposal
 from .store import Store
 
 
@@ -47,11 +48,14 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
 
     policy = load_policy()
     matched = fleet.select(proposal.selector)
-    if not matched:
-        raise RolloutError("Selector matches no agents.")
-    # Labels can change between proposal and approval; re-check the live set.
-    if hit := protected_targets(matched, policy):
-        raise RolloutError(f"Selector now matches protected agents {hit}; refusing.")
+    # Re-run the whole policy against the fleet as it is *now*: labels and
+    # membership can change between proposal and approval.
+    recheck = validate_proposal(
+        config_patch=proposal.config_patch, selector=proposal.selector,
+        targets=matched, evidence=proposal.evidence, reason=proposal.reason,
+    )
+    if not recheck.allowed:
+        raise RolloutError("Proposal no longer passes policy: " + " ".join(recheck.reasons))
 
     matched_ids = [a.agent_id for a in matched]
     canaries = matched_ids[: canary_size(len(matched_ids), policy)]
@@ -78,7 +82,7 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
 
     # --- Stage 1: canary ----------------------------------------------------
     before_canary_series = fleet.series_for_agents(canaries)
-    fleet.apply_patch(canaries, proposal.config_patch)
+    fleet.apply_patch(canaries, proposal.config_patch, rollout.rollout_id)
     store.audit("rollout-engine", "rollout.canary_applied", {
         "rollout_id": rollout.rollout_id, "agents": canaries,
     })
@@ -116,7 +120,7 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
 
     if failed:
         # --- Auto-rollback ----------------------------------------------------
-        fleet.rollback(canaries)
+        fleet.rollback(canaries, rollout.rollout_id)
         rollout.status = "rolled_back"
         rollout.finished_at = now()
         proposal.status = "rolled_back"
@@ -131,7 +135,7 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
     rollout.status = "promoting"
     remaining = [aid for aid in matched_ids if aid not in set(canaries)]
     if remaining:
-        fleet.apply_patch(remaining, proposal.config_patch)
+        fleet.apply_patch(remaining, proposal.config_patch, rollout.rollout_id)
     rollout.status = "applied"
     rollout.finished_at = now()
     proposal.status = "applied"
@@ -149,8 +153,17 @@ def manual_rollback(store: Store, fleet, rollout_id: str, actor: str) -> Rollout
     raw = store.get_rollout(rollout_id)
     if raw is None:
         raise RolloutError(f"No such rollout: {rollout_id}")
+    if not actor.startswith("human:") or len(actor) <= len("human:"):
+        raise RolloutError(f"Manual rollback requires a human actor, got {actor!r}.")
     rollout = Rollout.from_dict(raw)
-    fleet.rollback(rollout.matched_agent_ids)
+    if rollout.status != "applied":
+        raise RolloutError(
+            f"Rollout {rollout_id} is '{rollout.status}'; only applied rollouts "
+            "can be rolled back.")
+    try:
+        fleet.rollback(rollout.matched_agent_ids, rollout_id)
+    except RollbackBlocked as e:
+        raise RolloutError(str(e)) from e
     rollout.status = "rolled_back"
     rollout.finished_at = now()
     store.put_rollout(rollout.to_dict())
