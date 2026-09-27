@@ -13,16 +13,19 @@ OpAMP control plane:
 
 The telemetry model is intentionally simple: each service emits some number of
 active metric series through every agent that hosts it. A "cardinality
-explosion" scenario multiplies a service's series. A filter/transform
-processor patch that references the service brings its multiplier back down —
-on exactly the agents where the patch is applied, which is what makes canary
-verification meaningful.
+explosion" scenario multiplies a service's series. Processors wired into the
+metrics pipeline reshape that (see `_processor_factor`): stripping or
+filtering the exploded label brings it back down, over-broad filters drop the
+service entirely, and a pipeline without receivers/exporters delivers nothing
+— on exactly the agents where the patch is applied, which is what makes
+canary verification meaningful in both directions.
 """
 
 from __future__ import annotations
 
 import copy
 import random
+import re
 import time
 from typing import Any
 
@@ -71,19 +74,68 @@ def _merge_patch(target: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any
     return out
 
 
-def _patch_mitigates(config: dict[str, Any], service: str) -> bool:
-    """Does this agent config contain a processor that tames `service`?
+def _processor_factor(name: str, proc_cfg: Any, service: str,
+                      scenario: dict[str, Any]) -> float:
+    """Multiplicative effect of one *wired* processor on `service`'s series.
 
-    Heuristic for the sim: any allowlisted shaping processor whose config
-    mentions the service name counts as a mitigation.
+    A deliberately small model of real processor semantics:
+    - A processor scopes itself to a service if its config mentions
+      `service.name`; otherwise it applies to every service on the agent.
+    - filter: conditions naming the exploded label drop just the datapoints
+      that carry it (the offending metric goes away, ~0.9x of baseline);
+      conditions that don't narrow by label drop the service's metrics
+      entirely (0x) — which is what verification must catch.
+    - transform/attributes naming the exploded label strip it: the series
+      collapse back to ~baseline (1.1x, allowing some residual).
+    - samplers act on traces/logs, not metrics.
     """
+    text = str(proc_cfg)
+    if "service.name" in text and service not in text:
+        return 1.0
+    base = name.split("/")[0]
+    exploding = scenario.get("active") == "cardinality_explosion" and scenario.get("service") == service
+    label = scenario.get("label", "sku_id")
+    mult = float(scenario.get("multiplier", 8.0)) if exploding else 1.0
+    if base == "filter":
+        # Narrowed by a datapoint attribute (not just resource/service scope)?
+        dp_text = re.sub(r"resource\.attributes\[[^\]]*\]", "", text)
+        if "attributes[" in dp_text:
+            return 0.9 / mult if exploding and label in dp_text else 1.0
+        return 0.0
+    if base in {"transform", "attributes"} and exploding and label in text:
+        return 1.1 / mult
+    return 1.0
+
+
+def _metrics_pipeline_processors(config: dict[str, Any]) -> list[str] | None:
+    """Processor names in the metrics pipeline, or None if the pipeline
+    can't deliver anything (missing, or no receivers/exporters)."""
+    pipe = config.get("service", {}).get("pipelines", {}).get("metrics")
+    if not pipe or not pipe.get("receivers") or not pipe.get("exporters"):
+        return None
+    return list(pipe.get("processors", []))
+
+
+def _agent_series(config: dict[str, Any], services: list[str],
+                  scenario: dict[str, Any]) -> dict[str, int]:
+    """Series each hosted service delivers to the backend through this agent."""
+    wired = _metrics_pipeline_processors(config)
     processors = config.get("processors", {})
-    for name, proc_cfg in processors.items():
-        base = name.split("/")[0]
-        if base in {"filter", "transform", "attributes", "probabilistic_sampler", "tail_sampling"}:
-            if service in str(proc_cfg):
-                return True
-    return False
+    out: dict[str, int] = {}
+    for s in services:
+        if wired is None:
+            out[s] = 0
+            continue
+        exploding = scenario.get("active") == "cardinality_explosion" and scenario.get("service") == s
+        factor = float(scenario.get("multiplier", 8.0)) if exploding else 1.0
+        # Only processors wired into the pipeline do anything — defining one
+        # without adding it to `service.pipelines.metrics.processors` is a
+        # classic real-world no-op.
+        for name in wired:
+            if name in processors:
+                factor *= _processor_factor(name, processors[name], s, scenario)
+        out[s] = int(BASE_SERIES_PER_AGENT[s] * factor)
+    return out
 
 
 class SimulatedFleet:
@@ -162,34 +214,39 @@ class SimulatedFleet:
             return float(sc.get("multiplier", 8.0))
         return 1.0
 
+    @staticmethod
+    def _services(a: AgentInfo) -> list[str]:
+        return [s for s in a.labels.get("services", "").split(",") if s]
+
     def series_by_service(self) -> dict[str, int]:
         """Total active series per service across the fleet, mitigation-aware."""
+        return self.service_series_for_agents([a.agent_id for a in self.agents()])
+
+    def service_series_for_agents(self, agent_ids: list[str]) -> dict[str, int]:
+        """Series per service delivered by the given agents."""
+        wanted, sc = set(agent_ids), self.scenario()
         totals = {s: 0 for s in SERVICES}
         for a in self.agents():
-            hosted = a.labels.get("services", "").split(",")
-            for s in hosted:
-                if not s:
-                    continue
-                mult = self._service_multiplier(s)
-                if mult > 1.0 and _patch_mitigates(a.config, s):
-                    mult = 1.1  # mitigated agents shed the exploded labels
-                totals[s] += int(BASE_SERIES_PER_AGENT[s] * mult)
+            if a.agent_id in wanted:
+                for s, n in _agent_series(a.config, self._services(a), sc).items():
+                    totals[s] += n
+        return totals
+
+    def baseline_series_for_agents(self, agent_ids: list[str]) -> dict[str, int]:
+        """Pre-incident series per service for the given agents.
+
+        Real deployment: the same query over a trailing window before the
+        anomaly (e.g. last week, same hour)."""
+        wanted = set(agent_ids)
+        totals = {s: 0 for s in SERVICES}
+        for a in self.agents():
+            if a.agent_id in wanted:
+                for s in self._services(a):
+                    totals[s] += BASE_SERIES_PER_AGENT[s]
         return totals
 
     def series_for_agents(self, agent_ids: list[str]) -> int:
-        wanted = set(agent_ids)
-        total = 0
-        for a in self.agents():
-            if a.agent_id not in wanted:
-                continue
-            for s in a.labels.get("services", "").split(","):
-                if not s:
-                    continue
-                mult = self._service_multiplier(s)
-                if mult > 1.0 and _patch_mitigates(a.config, s):
-                    mult = 1.1
-                total += int(BASE_SERIES_PER_AGENT[s] * mult)
-        return total
+        return sum(self.service_series_for_agents(agent_ids).values())
 
     def recent_logs(self, service: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         sc = self.scenario()

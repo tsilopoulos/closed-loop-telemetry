@@ -90,9 +90,19 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
     series_ok = after_canary_series <= before_canary_series
     verification["no_series_increase"] = series_ok
 
+    # Two-sided gate: fewer series is not automatically better. A filter that
+    # drops everything "wins" the gate above; this one catches it.
+    min_frac = float(ver_policy.get("min_series_vs_baseline", 0.5))
+    baseline = fleet.baseline_series_for_agents(canaries)
+    per_service = fleet.service_series_for_agents(canaries)
+    starved = sorted(s for s, b in baseline.items() if b and per_service[s] < min_frac * b)
+    verification["services_below_baseline"] = starved
+    verification["signal_preserved"] = not starved
+
     failed = (
         (ver_policy.get("require_all_canaries_healthy", True) and not all_healthy)
         or (ver_policy.get("require_no_series_increase", True) and not series_ok)
+        or bool(starved)
     )
     rollout.verification = verification
 
