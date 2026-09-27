@@ -22,6 +22,10 @@ forbidden_config_paths:
   - receivers          # ingestion surface — human-only
   - service.telemetry  # the collectors' own observability stays intact
 
+# JSON merge patch replaces lists wholesale; reject pipeline processor lists
+# that would silently drop processors the matched agents already run.
+preserve_pipeline_processors: true
+
 # Proposals must cite the telemetry that motivated them.
 require_evidence: true
 min_reason_length: 20

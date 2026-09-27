@@ -55,7 +55,8 @@ session the `otel-fleet` tools are available directly — you (Claude) are the
 3. Human: `python3 -m cli.ctl show <id>` then `approve <id>` — watch canary →
    verify → promote in the output; `ctl audit` shows the full trail.
 4. Failure path: have the agent propose an exporter change (policy_rejected)
-   or use a `__break__` patch (auto-rollback after canary).
+   or have a pipeline reference an undefined processor (canaries report
+   RemoteConfigStatus FAILED → auto-rollback).
 
 ## Roadmap (rough priority order)
 

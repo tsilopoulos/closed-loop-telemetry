@@ -142,6 +142,26 @@ def validate_proposal(
     if len(reason.strip()) < int(policy.get("min_reason_length", 20)):
         reasons.append("Reason is too short to justify a production config change.")
 
+    # 3b. JSON merge patch replaces lists wholesale: `processors: [batch, x]`
+    # silently drops anything else already in that pipeline (a memory_limiter,
+    # say) on every agent where it differs. Additions must keep what's there.
+    if policy.get("preserve_pipeline_processors", True):
+        for pname, pipe in ((config_patch.get("service") or {}).get("pipelines") or {}).items():
+            new = (pipe or {}).get("processors") if isinstance(pipe, dict) else None
+            if not isinstance(new, list):
+                continue
+            dropped = sorted({
+                proc for a in targets
+                for proc in (a.config.get("service", {}).get("pipelines", {})
+                             .get(pname, {}).get("processors", []))
+                if proc not in new
+            })
+            if dropped:
+                reasons.append(
+                    f"Patch replaces service.pipelines.{pname}.processors and would "
+                    f"remove {dropped} on matched agents (merge patch replaces lists). "
+                    "Include the existing processors in the new list.")
+
     # 4. Selector sanity: it must match something, and never a protected agent.
     if not targets:
         reasons.append(f"Selector {selector} matches no agents.")
