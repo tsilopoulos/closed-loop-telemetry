@@ -171,6 +171,8 @@ def propose_config_change(reason: str, selector_json: str, config_patch_json: st
         selector_json: JSON selector for target agents. One of:
             {"labels": {"env": "prod"}} | {"labels": {"service": "checkout"}} |
             {"agent_ids": ["otelcol-0001"]} | {"all": true}
+            Labels are ANDed. The matched set must not include agents with a
+            protected label (see get_guardrails) — add e.g. "tier": "standard".
         config_patch_json: JSON merge patch onto agent config. Only telemetry-
             shaping processors are allowed (see get_guardrails). Example:
             {"processors": {"filter/drop-sku": {"metrics": {"datapoint":
@@ -190,8 +192,9 @@ def propose_config_change(reason: str, selector_json: str, config_patch_json: st
     except Exception as e:  # noqa: BLE001
         return _j({"error": f"Malformed JSON argument: {e}"})
 
+    targets = _fleet.select(selector)
     verdict = validate_proposal(
-        config_patch=config_patch, selector=selector,
+        config_patch=config_patch, selector=selector, targets=targets,
         evidence=evidence, reason=reason,
     )
     proposal = ConfigProposal.create(
@@ -208,7 +211,7 @@ def propose_config_change(reason: str, selector_json: str, config_patch_json: st
         "touched_paths": verdict.touched_paths,
     })
 
-    matched = len(_fleet.select(selector)) if verdict.allowed else 0
+    matched = len(targets) if verdict.allowed else 0
     return _j({
         "proposal_id": proposal.proposal_id,
         "status": proposal.status,

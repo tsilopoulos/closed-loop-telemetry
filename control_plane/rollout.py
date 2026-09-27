@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from .models import ConfigProposal, Rollout, new_id, now
-from .policy import canary_size, load_policy
+from .policy import canary_size, load_policy, protected_targets
 from .store import Store
 
 
@@ -41,6 +41,9 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
     matched = fleet.select(proposal.selector)
     if not matched:
         raise RolloutError("Selector matches no agents.")
+    # Labels can change between proposal and approval; re-check the live set.
+    if hit := protected_targets(matched, policy):
+        raise RolloutError(f"Selector now matches protected agents {hit}; refusing.")
 
     matched_ids = [a.agent_id for a in matched]
     canaries = matched_ids[: canary_size(len(matched_ids), policy)]
