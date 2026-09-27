@@ -1,0 +1,83 @@
+# Closing the Loop
+
+Reference implementation for **"Closing the Loop: AI Agents Driving an
+OpenTelemetry Fleet With MCP and OpAMP"** (Observability Summit Europe 2026).
+
+An AI agent gets **read-everything, apply-nothing** access to an OpenTelemetry
+collector fleet through an MCP server. It can *propose* configuration changes;
+a policy engine validates them, a human approves them, and a rollout engine
+applies them via canary with verification gates and automatic rollback — the
+role OpAMP plays in a real deployment.
+
+```
+             MCP (read + propose)                     human approval
+ AI agent ──────────────────────► control plane ◄──────────────────── ctl CLI
+   ▲                                   │ policy engine (guardrails.yaml)
+   │ telemetry evidence                │ rollout engine: canary → verify → promote
+   │                                   ▼        └── auto-rollback on failure
+ metrics / logs / fleet state     collector fleet   (SimulatedFleet | OpAMPBridge)
+```
+
+Everything runs locally with zero infrastructure via a simulated fleet. The
+`OpAMPBridge` seam (`control_plane/opamp_bridge.py`) is where a real OpAMP
+control plane plugs in without touching the agent-facing surface.
+
+## Quickstart
+
+```bash
+pip install "mcp[cli]" pyyaml pytest
+make test                # 9 tests, including the guardrail invariants
+make demo                # trigger a cardinality explosion in `checkout`
+```
+
+Then run the loop:
+
+```bash
+# 1. The AI agent side — connect any MCP client to mcp_server/server.py.
+#    With Claude Code, just open this repo: .mcp.json registers the server.
+#    Prompt: "Telemetry volume looks wrong. Investigate and fix it."
+#    The agent will query metrics/logs, read the guardrails, and call
+#    propose_config_change. Nothing is applied.
+
+# 2. The human side:
+python3 -m cli.ctl list
+python3 -m cli.ctl show <proposal-id>
+python3 -m cli.ctl approve <proposal-id>     # canary → verify → promote
+python3 -m cli.ctl audit                     # the full trail
+```
+
+Failure paths worth demoing: propose an `exporters` change (**policy_rejected**
+— redirecting telemetry is on the denylist), or a patch containing `__break__`
+(canaries go unhealthy → **automatic rollback**).
+
+## The guardrail model (what the talk is actually about)
+
+| Gate | Where | What it stops |
+|---|---|---|
+| Path allowlist/denylist | `policy/guardrails.yaml` | Agent touching exporters, receivers, auth — only telemetry-shaping processors are proposable |
+| Evidence requirement | policy engine | Proposals not grounded in observed telemetry |
+| Protected labels | policy engine | Targeting payment-critical agents at all |
+| Human approval | `cli/ctl.py` only | Autonomous application — there is structurally no MCP tool for it |
+| Canary cap (≤5%) | rollout engine | Fleet-wide blast radius on first contact |
+| Verification gates | rollout engine | Promoting configs that hurt (unhealthy canaries, series increase) |
+| Auto-rollback + audit log | rollout engine / store | Silent failures and unaccountable changes |
+
+## Layout
+
+```
+mcp_server/       the agent-facing MCP server (stdio)
+control_plane/    models, store, policy, rollout engine, fleet, OpAMP bridge
+cli/              ctl — human approval CLI
+policy/           guardrails.yaml — the reviewable agent contract
+scenarios/        demo perturbations (cardinality explosion, incident)
+backends/         adapter stubs for real metrics/traces/logs backends
+tests/            closed-loop + guardrail invariant tests
+```
+
+See `CLAUDE.md` for invariants, the demo script, and the roadmap.
+
+## Status
+
+Reference implementation / talk companion — not production software. The
+rollout engine runs synchronously in sim time; the OpAMP bridge and backend
+adapters are documented stubs. It is early days, deliberately and honestly.

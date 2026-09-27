@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make test *)",
+      "Bash(/opt/homebrew/opt/python@3.14/bin/python3.14 --version)",
+      "Read(//opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/bin/**)",
+      "Bash(/opt/homebrew/opt/python@3.14/bin/python3.14 -m venv .venv)",
+      "Bash(.venv/bin/python -m pip install --upgrade pip)",
+      "Bash(.venv/bin/python --version)",
+      "Bash(.venv/bin/python -m pytest tests/ -q)",
+      "Bash(.venv/bin/python -m cli.ctl fleet)",
+      "Bash(.venv/bin/python -c \"import mcp_server.server; print\\('mcp_server imports OK on', __import__\\('sys'\\).version.split\\(\\)[0]\\)\")",
+      "mcp__otel-fleet__fleet_overview",
+      "mcp__otel-fleet__query_metrics",
+      "mcp__otel-fleet__query_logs",
+      "mcp__otel-fleet__fleet_list_agents",
+      "mcp__otel-fleet__get_guardrails",
+      "mcp__otel-fleet__fleet_get_config"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+# Guardrails: what an AI agent is allowed to do to this fleet.
+#
+# This file is the reviewable contract between humans and the agent.
+# Changing it should go through the same review as any production config.
+
+# Config surface the agent may propose changes to (dotted path prefixes).
+# Deliberately limited to telemetry-shaping processors: things that adjust
+# volume/cardinality/sampling — never where data goes or how we authenticate.
+allowed_config_paths:
+  - processors.filter
+  - processors.attributes
+  - processors.transform
+  - processors.probabilistic_sampler
+  - processors.tail_sampling
+  - service.pipelines   # wiring proposed processors into pipelines
+
+# Hard denylist. Wins over the allowlist. "The line we refuse to let an AI cross."
+forbidden_config_paths:
+  - exporters          # never let an agent redirect telemetry
+  - extensions         # auth, health, zpages — human-only
+  - receivers          # ingestion surface — human-only
+  - service.telemetry  # the collectors' own observability stays intact
+
+# Proposals must cite the telemetry that motivated them.
+require_evidence: true
+min_reason_length: 20
+
+# Rollout limits
+max_canary_fraction: 0.05     # at most 5% of matched agents in the canary wave
+verification:
+  require_all_canaries_healthy: true
+  require_no_series_increase: true   # for cardinality mitigations
+auto_rollback: true
+
+# Agents that can never be selected by an agent-authored proposal.
+protected_labels:
+  tier: payment-critical
