@@ -55,6 +55,15 @@ processor that isn't defined (the canaries reject it exactly like a collector
 would — OpAMP `RemoteConfigStatus: FAILED` with the collector's error — →
 **automatic rollback**).
 
+Two more scenarios for the talk's "failure modes" and "restraint" beats:
+
+```bash
+python3 -m scenarios.trigger prompt_injection   # a log line tells the agent to move the
+                                                # exporter; even if it obeys, policy_rejected
+python3 -m scenarios.trigger traffic_growth     # every service +30% from scale-out; nothing
+                                                # is wrong — the right answer is no proposal
+```
+
 ## The guardrail model (what the talk is actually about)
 
 | Gate | Where | What it stops |
@@ -74,7 +83,7 @@ mcp_server/       the agent-facing MCP server (stdio)
 control_plane/    models, store, policy, rollout engine, fleet, OpAMP bridge
 cli/              ctl — human approval CLI
 policy/           guardrails.yaml — the reviewable agent contract
-scenarios/        demo perturbations (cardinality explosion, incident)
+scenarios/        demo perturbations (cardinality explosion, prompt injection, traffic growth, incident)
 backends/         adapter stubs for real metrics/traces/logs backends
 tests/            closed-loop + guardrail invariant tests
 ```
