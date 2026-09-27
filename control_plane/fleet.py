@@ -24,6 +24,8 @@ canary verification meaningful in both directions.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import random
 import re
 import time
@@ -86,6 +88,37 @@ def _merge_patch(target: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any
         else:
             out[k] = copy.deepcopy(v)
     return out
+
+
+# Component types a stock otelcol-contrib build knows (processors only; the
+# agent can't touch receivers/exporters anyway).
+KNOWN_PROCESSORS = {
+    "batch", "memory_limiter", "filter", "transform", "attributes", "resource",
+    "probabilistic_sampler", "tail_sampling", "k8sattributes", "resourcedetection",
+    "groupbyattrs", "metricstransform", "cumulativetodelta", "deltatocumulative",
+    "redaction",
+}
+
+
+def config_hash(config: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def collector_config_errors(config: dict[str, Any]) -> list[str]:
+    """The checks `otelcol validate` would fail on, for the parts the agent
+    can influence. Error text mirrors the collector's own messages."""
+    errors: list[str] = []
+    processors = config.get("processors", {}) or {}
+    for pid in processors:
+        if pid.split("/")[0] not in KNOWN_PROCESSORS:
+            errors.append(f'processors: unknown type: "{pid.split("/")[0]}" for id: "{pid}"')
+    for pname, pipe in (config.get("service", {}).get("pipelines", {}) or {}).items():
+        for ref in (pipe or {}).get("processors", []) or []:
+            if ref not in processors:
+                errors.append(
+                    f'service::pipelines::{pname}: references processor "{ref}" '
+                    "which is not configured")
+    return errors
 
 
 def _processor_factor(name: str, proc_cfg: Any, service: str,
@@ -274,7 +307,7 @@ class SimulatedFleet:
         wanted, sc = set(agent_ids), self.scenario()
         totals = {s: 0 for s in SERVICES}
         for a in self.agents():
-            if a.agent_id in wanted:
+            if a.agent_id in wanted and a.healthy:  # a down collector delivers nothing
                 for s, n in _agent_series(a.config, self._services(a), sc).items():
                     totals[s] += n
         return totals
@@ -321,17 +354,29 @@ class SimulatedFleet:
 
     def apply_patch(self, agent_ids: list[str], patch: dict[str, Any],
                     rollout_id: str) -> None:
+        """Push a remote config (OpAMP ServerToAgent.remote_config) and record
+        what each agent reports back (RemoteConfigStatus + health).
+
+        Like a real collector, an agent validates the config it receives: one
+        that references an undefined processor or an unknown component type is
+        rejected — status FAILED with the collector's error message — and the
+        collector is down until someone rolls back."""
         raw = self._raw()
         for aid in agent_ids:
             a = AgentInfo.from_dict(raw[aid])
-            a.history.append({"rollout_id": rollout_id,
-                              "config": copy.deepcopy(a.config), "healthy": a.healthy})
+            a.history.append({"rollout_id": rollout_id, "config": copy.deepcopy(a.config),
+                              "healthy": a.healthy,
+                              "remote_config_status": copy.deepcopy(a.remote_config_status)})
             a.history = a.history[-HISTORY_DEPTH:]
             a.config = _merge_patch(a.config, patch)
             a.config_version += 1
-            # Sim: a patch containing "__break__" renders the agent unhealthy,
-            # so tests and demos can exercise the auto-rollback path.
-            a.healthy = "__break__" not in str(patch)
+            errors = collector_config_errors(a.config)
+            a.healthy = not errors
+            a.remote_config_status = {
+                "status": "FAILED" if errors else "APPLIED",
+                "last_remote_config_hash": config_hash(a.config),
+                "error_message": "; ".join(errors),
+            }
             raw[aid] = a.to_dict()
         self.store.put_kv(FLEET_KEY, raw)
         self._record()
@@ -353,6 +398,7 @@ class SimulatedFleet:
             prev = a.history.pop()
             a.config = prev["config"]
             a.healthy = prev["healthy"]
+            a.remote_config_status = prev.get("remote_config_status", a.remote_config_status)
             a.config_version += 1
             raw[a.agent_id] = a.to_dict()
         self.store.put_kv(FLEET_KEY, raw)
