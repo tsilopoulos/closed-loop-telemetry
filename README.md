@@ -50,8 +50,10 @@ python3 -m cli.ctl audit                     # the full trail
 ```
 
 Failure paths worth demoing: propose an `exporters` change (**policy_rejected**
-— redirecting telemetry is on the denylist), or a patch containing `__break__`
-(canaries go unhealthy → **automatic rollback**).
+— redirecting telemetry is on the denylist), or a pipeline that references a
+processor that isn't defined (the canaries reject it exactly like a collector
+would — OpAMP `RemoteConfigStatus: FAILED` with the collector's error — →
+**automatic rollback**).
 
 ## The guardrail model (what the talk is actually about)
 

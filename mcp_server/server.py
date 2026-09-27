@@ -87,7 +87,8 @@ def fleet_list_agents(env: str | None = None, region: str | None = None,
     agents = _fleet.select({"labels": labels} if labels else {"all": True})
     return _j([
         {"agent_id": a.agent_id, "labels": a.labels,
-         "healthy": a.healthy, "config_version": a.config_version}
+         "healthy": a.healthy, "config_version": a.config_version,
+         "remote_config_status": a.remote_config_status["status"]}
         for a in agents[:limit]
     ] + ([{"truncated": len(agents) - limit}] if len(agents) > limit else []))
 
@@ -99,7 +100,8 @@ def fleet_get_config(agent_id: str) -> str:
     if a is None:
         return _j({"error": f"No agent '{agent_id}'. Use fleet_list_agents first."})
     return _j({"agent_id": a.agent_id, "config_version": a.config_version,
-               "healthy": a.healthy, "config": a.config})
+               "healthy": a.healthy, "remote_config_status": a.remote_config_status,
+               "config": a.config})
 
 
 @mcp.tool()
@@ -187,10 +189,16 @@ def propose_config_change(reason: str, selector_json: str, config_patch_json: st
             Labels are ANDed. The matched set must not include agents with a
             protected label (see get_guardrails) — add e.g. "tier": "standard".
         config_patch_json: JSON merge patch onto agent config. Only telemetry-
-            shaping processors are allowed (see get_guardrails). Example:
-            {"processors": {"filter/drop-sku": {"metrics": {"datapoint":
-            ["attributes[\\"sku_id\\"] != nil and resource.attributes[\\"service.name\\"] == \\"checkout\\""]}}},
-             "service": {"pipelines": {"metrics": {"processors": ["batch", "filter/drop-sku"]}}}}
+            shaping processors are allowed (see get_guardrails). Prefer
+            stripping an offending label over dropping the data. Example:
+            {"processors": {"transform/strip-sku": {"metric_statements": [
+              {"context": "datapoint", "statements": ["delete_key(attributes,
+              \\"sku_id\\") where resource.attributes[\\"service.name\\"] ==
+              \\"checkout\\""]}]}},
+             "service": {"pipelines": {"metrics": {"processors":
+              ["batch", "transform/strip-sku"]}}}}
+            Lists are replaced wholesale (JSON merge patch): a pipeline's new
+            processors list must keep the processors already in it.
         evidence_json: JSON list of strings — the queries/observations that
             justify the change.
 
