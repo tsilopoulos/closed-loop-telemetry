@@ -238,6 +238,37 @@ def test_mcp_server_imports():
     import mcp_server.server  # noqa: F401
 
 
+@pytest.fixture()
+def server(env, monkeypatch):
+    """The MCP server module wired to this test's store and fleet."""
+    import mcp_server.server as srv
+    store, fleet = env
+    monkeypatch.setattr(srv, "_store", store)
+    monkeypatch.setattr(srv, "_fleet", fleet)
+    return srv
+
+
+def test_mcp_reads_do_not_leak_the_scenario(env, server):
+    """The agent must investigate, not read the answer key."""
+    store, fleet = env
+    fleet.set_scenario({"active": "cardinality_explosion", "service": "checkout",
+                        "label": "sku_id", "multiplier": 8.0})
+    out = server.fleet_overview() + server.query_metrics() + server.query_metrics(group_by="agent")
+    for leak in ("cardinality_explosion", "sku_id", "scenario", "multiplier", "baseline"):
+        assert leak not in out
+
+
+def test_query_metrics_shows_the_jump_over_time(env, server):
+    store, fleet = env
+    fleet.set_scenario({"active": "cardinality_explosion", "service": "checkout",
+                        "label": "sku_id", "multiplier": 8.0})
+    points = json.loads(server.query_metrics(window_minutes=60, step_minutes=5))["points"]
+    assert len(points) == 13
+    first, last = points[0]["by_service"]["checkout"], points[-1]["by_service"]["checkout"]
+    assert last == 8 * first
+    assert points[0]["by_service"]["search"] == points[-1]["by_service"]["search"]
+
+
 # ---------------------------------------------------------------------------
 # The closed loop
 
