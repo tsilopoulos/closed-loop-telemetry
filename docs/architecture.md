@@ -84,6 +84,9 @@ The agent is treated as a capable but untrusted operator:
   including at least one telemetry query, and `ctl approve` prints them.
 
 Residual risks (talk material, not solved here): prompt injection via
-telemetry content read by the agent (log lines are untrusted input!),
+telemetry content read by the agent (log lines are untrusted input! —
+`scenarios.trigger prompt_injection` demonstrates that the architecture holds
+when the agent is fooled; `query_logs` labels its output untrusted, but that
+label is a hint to the model, not a control),
 approval fatigue turning humans into rubber stamps, and slow-burn effects
 that pass verification gates but degrade quality over days.
