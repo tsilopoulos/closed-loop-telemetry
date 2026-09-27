@@ -11,7 +11,8 @@ integration begins.
    `query_metrics`, `query_logs`, `get_guardrails`, `list_proposals`.
 2. **Propose** — `propose_config_change` creates a `ConfigProposal`. The
    policy engine validates it *at creation*: config-path allowlist/denylist,
-   evidence requirement, protected-agent labels. Invalid proposals are stored
+   evidence requirement, protected-agent labels (checked against the agents the
+   selector resolves to, not the selector text). Invalid proposals are stored
    as `policy_rejected` and can never be applied.
 3. **Approve** — a human runs `ctl approve`. This is the only code path into
    the rollout engine, and it rejects `ai-agent:*` actors defensively.

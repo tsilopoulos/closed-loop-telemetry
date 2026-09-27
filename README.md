@@ -58,7 +58,7 @@ Failure paths worth demoing: propose an `exporters` change (**policy_rejected**
 |---|---|---|
 | Path allowlist/denylist | `policy/guardrails.yaml` | Agent touching exporters, receivers, auth — only telemetry-shaping processors are proposable |
 | Evidence requirement | policy engine | Proposals not grounded in observed telemetry |
-| Protected labels | policy engine | Targeting payment-critical agents at all |
+| Protected labels | policy engine + rollout engine | Reaching payment-critical agents at all — checked on the agents a selector resolves to, at propose and again at approve time |
 | Human approval | `cli/ctl.py` only | Autonomous application — there is structurally no MCP tool for it |
 | Canary cap (≤5%) | rollout engine | Fleet-wide blast radius on first contact |
 | Verification gates | rollout engine | Promoting configs that hurt (unhealthy canaries, series increase) |

@@ -4,10 +4,12 @@ This is the heart of the talk's guardrail model. Every proposal is validated
 against a declarative policy *at creation time* — an AI agent cannot even
 register a proposal that touches forbidden config surface. Enforcement points:
 
-1. propose-time: path allowlist/denylist, selector limits, evidence required
+1. propose-time: path allowlist/denylist, protected agents (checked against
+   the resolved agent set, not the selector text), evidence required
 2. approve-time: human approval is structurally required (there is no
    API or MCP tool that applies config; only cli/ctl.py calls the rollout engine)
-3. rollout-time: canary fraction cap, verification gates, auto-rollback
+3. rollout-time: protected agents re-checked against the fleet as it is now,
+   canary fraction cap, verification gates, auto-rollback
 
 The policy file is YAML (policy/guardrails.yaml) so changes to what the agent
 may touch are reviewable in version control like any other config change.
@@ -20,7 +22,7 @@ from typing import Any
 
 import yaml
 
-from .models import PolicyVerdict
+from .models import AgentInfo, PolicyVerdict
 
 DEFAULT_POLICY_PATH = os.environ.get(
     "CTL_POLICY_PATH",
@@ -51,14 +53,32 @@ def _path_matches(path: str, rule: str) -> bool:
     return path == rule or path.startswith(rule + ".") or path.startswith(rule + "/")
 
 
+def protected_targets(targets: list[AgentInfo],
+                      policy: dict[str, Any] | None = None) -> list[str]:
+    """IDs of resolved agents carrying any protected label.
+
+    Checked against the agents a selector actually matches, not the selector
+    text: `{"labels": {"service": "checkout"}}` or `{"all": true}` must not
+    reach a payment-critical collector just because it doesn't say "tier".
+    """
+    policy = policy or load_policy()
+    protected = policy.get("protected_labels", {})
+    return [
+        a.agent_id for a in targets
+        if any(a.labels.get(k) == v for k, v in protected.items())
+    ]
+
+
 def validate_proposal(
     *,
     config_patch: dict[str, Any],
     selector: dict[str, Any],
+    targets: list[AgentInfo],
     evidence: list[str],
     reason: str,
     policy: dict[str, Any] | None = None,
 ) -> PolicyVerdict:
+    """`targets` is the fleet's resolution of `selector` at proposal time."""
     policy = policy or load_policy()
     reasons: list[str] = []
     touched = _collect_paths(config_patch)
@@ -92,12 +112,17 @@ def validate_proposal(
     if len(reason.strip()) < int(policy.get("min_reason_length", 20)):
         reasons.append("Reason is too short to justify a production config change.")
 
-    # 4. Selector sanity: protected agents can never be targeted.
-    protected = policy.get("protected_labels", {})
-    sel_labels = selector.get("labels", {})
-    for k, v in protected.items():
-        if sel_labels.get(k) == v:
-            reasons.append(f"Selector targets protected agents ({k}={v}).")
+    # 4. Selector sanity: it must match something, and never a protected agent.
+    if not targets:
+        reasons.append(f"Selector {selector} matches no agents.")
+    if hit := protected_targets(targets, policy):
+        protected = policy.get("protected_labels", {})
+        reasons.append(
+            f"Selector matches protected agents {hit} "
+            f"({', '.join(f'{k}={v}' for k, v in protected.items())}). "
+            "Narrow the selector to exclude them, e.g. add a label that "
+            "only non-protected agents carry."
+        )
 
     return PolicyVerdict(allowed=not reasons, reasons=reasons, touched_paths=touched)
 
