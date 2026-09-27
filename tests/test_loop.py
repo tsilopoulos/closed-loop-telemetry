@@ -64,17 +64,30 @@ def env():
     return store, fleet
 
 
+def _receipt(store, tool="query_metrics", output="{}", issued_at=None):
+    """A receipt as the MCP server would issue it for a real read."""
+    from control_plane.models import EvidenceReceipt
+    r = EvidenceReceipt.issue(tool, {}, output)
+    if issued_at is not None:
+        r.issued_at = issued_at
+    store.put_receipt(r.to_dict())
+    return r.receipt_id
+
+
 def _make_proposal(env, *, patch=None, evidence=None, selector=None):
     store, fleet = env
     patch = patch or MITIGATION_PATCH
     evidence = evidence if evidence is not None else [
-        "query_metrics: checkout active_series 8x baseline",
-        "query_logs: WARN high-cardinality label 'sku_id'",
+        {"receipt_id": _receipt(store, "query_metrics"),
+         "observation": "checkout active_series 8x baseline"},
+        {"receipt_id": _receipt(store, "query_logs"),
+         "observation": "WARN high-cardinality label 'sku_id'"},
     ]
     selector = DEMO_SELECTOR if selector is None else selector
     verdict = validate_proposal(
         config_patch=patch, selector=selector, targets=fleet.select(selector),
         evidence=evidence, reason="Mitigate checkout sku_id cardinality explosion",
+        receipts=store.get_receipt,
     )
     p = ConfigProposal.create(
         author="ai-agent:test", reason="Mitigate checkout sku_id cardinality explosion",
@@ -116,6 +129,42 @@ def test_policy_allows_pipeline_processor_lists(env):
     _, verdict = _make_proposal(env, patch={
         "service": {"pipelines": {"logs": {"processors": ["batch"]}}}})
     assert verdict.allowed
+
+
+@pytest.mark.parametrize("evidence", [
+    ["query_metrics showed 8x"],                                  # free text
+    [{"receipt_id": "ev-made-up", "observation": "8x"}],          # forged id
+])
+def test_policy_requires_real_receipts(env, evidence):
+    """Evidence the model can't hallucinate: it must cite issued receipts."""
+    _, verdict = _make_proposal(env, evidence=evidence)
+    assert not verdict.allowed
+    assert any("receipt" in r for r in verdict.reasons)
+
+
+def test_policy_requires_telemetry_receipt(env):
+    store, _ = env
+    ev = [{"receipt_id": _receipt(store, "fleet_overview"), "observation": "60 agents"}]
+    _, verdict = _make_proposal(env, evidence=ev)
+    assert not verdict.allowed
+    assert any("telemetry" in r for r in verdict.reasons)
+
+
+def test_policy_rejects_stale_receipts(env):
+    import time
+    store, _ = env
+    ev = [{"receipt_id": _receipt(store, "query_metrics", issued_at=time.time() - 7200),
+           "observation": "old"}]
+    _, verdict = _make_proposal(env, evidence=ev)
+    assert not verdict.allowed
+
+
+def test_read_tools_issue_receipts_with_real_output(env, server):
+    store, fleet = env
+    out = _call(server, "query_logs", {"service": "checkout", "limit": 3})
+    r = store.get_receipt(out["evidence_receipt"])
+    assert r["tool"] == "query_logs" and r["args"] == {"service": "checkout", "limit": 3}
+    assert json.loads(r["excerpt"])["lines"] == out["lines"]
 
 
 def test_policy_requires_evidence(env):
@@ -301,11 +350,14 @@ def _call(server, tool, args):
 def test_propose_via_mcp_creates_pending_proposal_and_audit(env, server):
     """The real propose path: typed args through MCP, policy, store, audit."""
     store, fleet = env
+    m = _call(server, "query_metrics", {})["evidence_receipt"]
+    lg = _call(server, "query_logs", {"service": "checkout"})["evidence_receipt"]
     out = _call(server, "propose_config_change", {
         "reason": "Mitigate checkout sku_id cardinality explosion",
         "selector": DEMO_SELECTOR,
         "config_patch": TRANSFORM_PATCH,
-        "evidence": ["query_metrics: checkout 8x", "query_logs: WARN sku_id"],
+        "evidence": [{"receipt_id": m, "observation": "checkout 8x"},
+                     {"receipt_id": lg, "observation": "WARN sku_id"}],
     })
     assert out["status"] == "pending_approval" and out["matched_agents"] > 0
     assert "approve" not in out["next_step"].split("human")[0]  # never told to self-approve
@@ -322,7 +374,8 @@ def test_propose_via_mcp_records_policy_rejection(env, server):
         "reason": "Route telemetry somewhere cheaper, observed cost spike",
         "selector": DEMO_SELECTOR,
         "config_patch": {"exporters": {"otlphttp": {"endpoint": "https://evil.example.com"}}},
-        "evidence": ["query_metrics: volume up"],
+        "evidence": [{"receipt_id": _call(server, "query_metrics", {})["evidence_receipt"],
+                      "observation": "volume up"}],
     })
     assert out["status"] == "policy_rejected"
     assert store.get_proposal(out["proposal_id"])["status"] == "policy_rejected"
@@ -340,7 +393,8 @@ def test_propose_via_mcp_rejects_wrong_types(env, server):
     with pytest.raises(ToolError):
         _call(server, "propose_config_change", {
             "reason": "x" * 30, "selector": DEMO_SELECTOR,
-            "config_patch": "not an object", "evidence": ["e"]})
+            "config_patch": "not an object",
+            "evidence": [{"receipt_id": "ev-x", "observation": "e"}]})
 
 
 def test_mcp_reads_do_not_leak_the_scenario(env, server):
