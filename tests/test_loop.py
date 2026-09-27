@@ -37,6 +37,22 @@ MITIGATION_PATCH = {
 }
 
 
+TRANSFORM_PATCH = {
+    "processors": {
+        "transform/strip-sku": {
+            "metric_statements": [{
+                "context": "datapoint",
+                "statements": [
+                    'delete_key(attributes, "sku_id") where '
+                    'resource.attributes["service.name"] == "checkout"'
+                ],
+            }]
+        }
+    },
+    "service": {"pipelines": {"metrics": {
+        "processors": ["batch", "transform/strip-sku"]}}},
+}
+
 # Excludes tier=payment-critical agents, as the guardrails require.
 DEMO_SELECTOR = {"labels": {"service": "checkout", "env": "prod", "tier": "standard"}}
 
@@ -299,25 +315,74 @@ def test_happy_path_canary_then_promote(env):
 
 
 def test_bad_config_auto_rolls_back(env):
+    """A pipeline referencing an undefined processor: policy allows the paths,
+    the collector rejects the config (RemoteConfigStatus FAILED), and the
+    canaries are rolled back before anything else sees it."""
     store, fleet = env
-    patch = {
-        "processors": {"filter/broken": {"__break__": True, "mentions": "checkout"}},
-    }
+    patch = {"service": {"pipelines": {"metrics": {
+        "processors": ["batch", "filter/typo-in-name"]}}}}
     p, verdict = _make_proposal(env, patch=patch)
     assert verdict.allowed  # policy can't know it's broken; verification catches it
 
     rollout = start_rollout(store, fleet, p.proposal_id, approver="human:tester")
     assert rollout.status == "rolled_back"
     assert rollout.verification["all_canaries_healthy"] is False
+    errors = list(rollout.verification["remote_config_failed"].values())
+    assert 'references processor "filter/typo-in-name" which is not configured' in errors[0]
 
-    # canaries restored and healthy again
+    # canaries restored and healthy again; nobody else was touched
     for aid in rollout.canary_agent_ids:
         a = fleet.get_agent(aid)
-        assert a.healthy
-        assert "filter/broken" not in a.config.get("processors", {})
+        assert a.healthy and a.remote_config_status["status"] == "APPLIED"
+        assert "filter/typo-in-name" not in a.config["service"]["pipelines"]["metrics"]["processors"]
+    for aid in set(rollout.matched_agent_ids) - set(rollout.canary_agent_ids):
+        assert fleet.get_agent(aid).config_version == 1
 
     final = store.get_proposal(p.proposal_id)
     assert final["status"] == "rolled_back"
+
+
+def test_unknown_component_type_is_rejected_by_collector(env):
+    store, fleet = env
+    patch = {"processors": {"filtr/x": {"note": "checkout"}}}
+    p, verdict = _make_proposal(env, patch=patch)
+    # outside the allowlist anyway — but the sim's collector would reject it too
+    assert not verdict.allowed
+    from control_plane.fleet import collector_config_errors
+    assert collector_config_errors(patch) == ['processors: unknown type: "filtr" for id: "filtr/x"']
+
+
+def test_transform_strip_label_mitigation(env):
+    """The recommended fix: strip the label, keep checkout's metrics."""
+    store, fleet = env
+    fleet.set_scenario({"active": "cardinality_explosion",
+                        "service": "checkout", "label": "sku_id", "multiplier": 8.0})
+    base = fleet.baseline_series_for_agents([a.agent_id for a in fleet.agents()])["checkout"]
+    p, verdict = _make_proposal(env, patch=TRANSFORM_PATCH)
+    assert verdict.allowed
+    rollout = start_rollout(store, fleet, p.proposal_id, approver="human:tester")
+    assert rollout.status == "applied"
+    assert fleet.get_agent(rollout.canary_agent_ids[0]).remote_config_status["status"] == "APPLIED"
+    matched = rollout.matched_agent_ids
+    assert fleet.service_series_for_agents(matched)["checkout"] == int(
+        1.1 * fleet.baseline_series_for_agents(matched)["checkout"])
+    assert fleet.series_by_service()["checkout"] < 8 * base
+
+
+def test_policy_rejects_dropping_existing_pipeline_processors(env):
+    store, fleet = env
+    raw = store.get_kv("fleet")
+    for a in raw.values():
+        a["config"]["processors"]["memory_limiter"] = {"limit_mib": 512}
+        a["config"]["service"]["pipelines"]["metrics"]["processors"] = ["memory_limiter", "batch"]
+    store.put_kv("fleet", raw)
+    _, verdict = _make_proposal(env)  # MITIGATION_PATCH sets [batch, filter/...]
+    assert not verdict.allowed
+    assert any("memory_limiter" in r for r in verdict.reasons)
+    patch = {**MITIGATION_PATCH, "service": {"pipelines": {"metrics": {
+        "processors": ["memory_limiter", "batch", "filter/drop-sku-checkout"]}}}}
+    _, verdict = _make_proposal(env, patch=patch)
+    assert verdict.allowed
 
 
 def test_overbroad_filter_fails_baseline_gate(env):

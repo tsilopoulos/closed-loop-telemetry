@@ -53,10 +53,16 @@ class AgentInfo:
     agent_id: str
     labels: dict[str, str]  # e.g. {"env": "prod", "region": "us-east-1"}
     config: dict[str, Any]  # effective collector-style config
-    healthy: bool = True
+    healthy: bool = True  # OpAMP ComponentHealth.healthy
     config_version: int = 1
+    # OpAMP RemoteConfigStatus as the agent reports it: status is APPLIED |
+    # APPLYING | FAILED, with the hash of the remote config it refers to and
+    # the collector's own error message when it rejected the config.
+    remote_config_status: dict[str, Any] = field(
+        default_factory=lambda: {"status": "APPLIED", "last_remote_config_hash": None,
+                                 "error_message": ""})
     # Stack of configs this agent had before each rollout touched it, newest
-    # last: [{"rollout_id", "config", "healthy"}]. A rollout can be rolled
+    # last: [{"rollout_id", "config", "healthy", "remote_config_status"}]. A rollout can be rolled
     # back on an agent only while it is the newest entry, so undoing an older
     # rollout can never silently discard a newer one.
     history: list[dict[str, Any]] = field(default_factory=list)
