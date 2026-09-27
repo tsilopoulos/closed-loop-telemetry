@@ -18,7 +18,8 @@ integration begins.
    the rollout engine, and it rejects `ai-agent:*` actors defensively.
 4. **Actuate** — the rollout engine selects a canary wave (≤ `max_canary_fraction`),
    applies the patch, runs verification gates (canary health, no series
-   increase), then either promotes to the remaining matched agents or
+   increase, no service below `min_series_vs_baseline` — fewer series is not
+   automatically better), then either promotes to the remaining matched agents or
    auto-rolls-back. Every transition is audit-logged.
 5. **Verify (again)** — the agent can watch the outcome via `get_proposal`,
    closing the loop with fresh telemetry.
@@ -59,6 +60,10 @@ The agent is treated as a capable but untrusted operator:
 - It cannot redirect telemetry: `exporters` is denylisted — exfiltration via
   config change is the scenario this rule exists for.
 - It cannot touch ingestion or auth: `receivers`, `extensions` denylisted.
+- It cannot rewire or delete pipelines: only `service.pipelines.*.processors`
+  is allowlisted, so `exporters: []` or `pipelines: null` is rejected.
+- It cannot "fix" volume by deleting the signal: the baseline gate fails a
+  canary where any service drops below half its pre-incident series.
 - It cannot go big fast: canary cap + verification + auto-rollback bound the
   blast radius even of an approved bad idea.
 - Everything it does is attributable: author + evidence + audit log.

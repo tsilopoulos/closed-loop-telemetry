@@ -12,7 +12,8 @@ allowed_config_paths:
   - processors.transform
   - processors.probabilistic_sampler
   - processors.tail_sampling
-  - service.pipelines   # wiring proposed processors into pipelines
+  - service.pipelines.*.processors   # wiring processors in — never receivers/exporters,
+                                     # and never deleting a pipeline
 
 # Hard denylist. Wins over the allowlist. "The line we refuse to let an AI cross."
 forbidden_config_paths:
@@ -30,6 +31,10 @@ max_canary_fraction: 0.05     # at most 5% of matched agents in the canary wave
 verification:
   require_all_canaries_healthy: true
   require_no_series_increase: true   # for cardinality mitigations
+  # Two-sided: mitigations may shed excess, never the signal. Every service on
+  # the canaries must keep at least this fraction of its pre-incident baseline
+  # (catches over-broad filters and pipelines that stop delivering).
+  min_series_vs_baseline: 0.5
 auto_rollback: true
 
 # Agents that can never be selected by an agent-authored proposal.

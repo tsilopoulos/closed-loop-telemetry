@@ -48,9 +48,15 @@ def _collect_paths(patch: dict[str, Any], prefix: str = "") -> list[str]:
 
 
 def _path_matches(path: str, rule: str) -> bool:
-    """Rule `processors.filter` matches the path itself, its children, and
-    named instances (OTel-style `processors.filter/drop-sku.…`)."""
-    return path == rule or path.startswith(rule + ".") or path.startswith(rule + "/")
+    """Segment-wise prefix match. A rule segment matches the same key or a
+    named instance of it (`filter` matches `filter/drop-sku`); `*` matches
+    any one key. The path must be at least as deep as the rule, so rule
+    `service.pipelines.*.processors` does NOT allow `service.pipelines: null`
+    or rewiring a pipeline's exporters."""
+    ps, rs = path.split("."), rule.split(".")
+    if len(ps) < len(rs):
+        return False
+    return all(r == "*" or p == r or p.startswith(r + "/") for p, r in zip(ps, rs))
 
 
 def protected_targets(targets: list[AgentInfo],

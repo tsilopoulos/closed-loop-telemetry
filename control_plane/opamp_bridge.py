@@ -35,7 +35,8 @@ class OpAMPBridge:
             "OpAMPBridge is an integration stub. Point it at your OpAMP "
             "server's management API and implement the FleetController "
             "methods (agents, select, apply_patch, rollback, "
-            "series_by_service, series_for_agents, recent_logs, scenario). "
+            "series_by_service, series_for_agents, service_series_for_agents, "
+            "baseline_series_for_agents, recent_logs, scenario). "
             "See docs/architecture.md#opamp-bridge."
         )
 
@@ -52,5 +53,9 @@ class OpAMPBridge:
     def series_by_service(self) -> dict[str, int]: ...
 
     def series_for_agents(self, agent_ids: list[str]) -> int: ...
+
+    def service_series_for_agents(self, agent_ids: list[str]) -> dict[str, int]: ...
+
+    def baseline_series_for_agents(self, agent_ids: list[str]) -> dict[str, int]: ...
 
     def recent_logs(self, service: str | None, limit: int) -> list[dict[str, Any]]: ...
