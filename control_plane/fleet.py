@@ -36,6 +36,18 @@ FLEET_KEY = "fleet"
 SCENARIO_KEY = "scenario"
 HISTORY_KEY = "series_history"
 HISTORY_MAX = 500
+HISTORY_DEPTH = 20  # per-agent rollback depth
+
+
+class RollbackBlocked(Exception):
+    def __init__(self, rollout_id: str, blocked: dict[str, str | None]):
+        newer = sorted({r for r in blocked.values() if r})
+        super().__init__(
+            f"Can't roll back {rollout_id} on {sorted(blocked)}: "
+            + (f"newer rollout(s) {newer} changed them since; roll those back first."
+               if newer else "this rollout is not the latest change there.")
+        )
+        self.blocked = blocked
 
 SERVICES = ["checkout", "inventory", "fulfillment", "order-mgmt", "search"]
 REGIONS = ["us-east-1", "eu-west-1", "ap-southeast-1"]
@@ -307,11 +319,14 @@ class SimulatedFleet:
 
     # -- writes (only the rollout engine calls these) ---------------------------
 
-    def apply_patch(self, agent_ids: list[str], patch: dict[str, Any]) -> None:
+    def apply_patch(self, agent_ids: list[str], patch: dict[str, Any],
+                    rollout_id: str) -> None:
         raw = self._raw()
         for aid in agent_ids:
             a = AgentInfo.from_dict(raw[aid])
-            a.previous_config = copy.deepcopy(a.config)
+            a.history.append({"rollout_id": rollout_id,
+                              "config": copy.deepcopy(a.config), "healthy": a.healthy})
+            a.history = a.history[-HISTORY_DEPTH:]
             a.config = _merge_patch(a.config, patch)
             a.config_version += 1
             # Sim: a patch containing "__break__" renders the agent unhealthy,
@@ -321,16 +336,25 @@ class SimulatedFleet:
         self.store.put_kv(FLEET_KEY, raw)
         self._record()
 
-    def rollback(self, agent_ids: list[str]) -> None:
+    def rollback(self, agent_ids: list[str], rollout_id: str) -> None:
+        """Undo `rollout_id` on these agents — all or nothing.
+
+        Raises RollbackBlocked if a newer rollout has since touched any of
+        them (roll that back first), or if this rollout never touched them."""
         raw = self._raw()
-        for aid in agent_ids:
-            a = AgentInfo.from_dict(raw[aid])
-            if a.previous_config is not None:
-                a.config = a.previous_config
-                a.previous_config = None
-                a.config_version += 1
-            a.healthy = True
-            raw[aid] = a.to_dict()
+        agents = [AgentInfo.from_dict(raw[aid]) for aid in agent_ids]
+        blocked = {
+            a.agent_id: (a.history[-1]["rollout_id"] if a.history else None)
+            for a in agents if not a.history or a.history[-1]["rollout_id"] != rollout_id
+        }
+        if blocked:
+            raise RollbackBlocked(rollout_id, blocked)
+        for a in agents:
+            prev = a.history.pop()
+            a.config = prev["config"]
+            a.healthy = prev["healthy"]
+            a.config_version += 1
+            raw[a.agent_id] = a.to_dict()
         self.store.put_kv(FLEET_KEY, raw)
         self._record()
 
