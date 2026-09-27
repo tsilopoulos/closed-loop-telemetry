@@ -71,7 +71,7 @@ def _make_proposal(env, *, patch=None, evidence=None, selector=None):
         "query_metrics: checkout active_series 8x baseline",
         "query_logs: WARN high-cardinality label 'sku_id'",
     ]
-    selector = selector or DEMO_SELECTOR
+    selector = DEMO_SELECTOR if selector is None else selector
     verdict = validate_proposal(
         config_patch=patch, selector=selector, targets=fleet.select(selector),
         evidence=evidence, reason="Mitigate checkout sku_id cardinality explosion",
@@ -239,14 +239,42 @@ def test_policy_rejected_proposal_can_never_roll_out(env):
         start_rollout(store, fleet, p.proposal_id, approver="human:tester")
 
 
+# The agent's entire surface. Adding a tool here is a talk-level decision:
+# it must be read-only, or the single propose tool. Never apply/approve.
+EXPECTED_MCP_TOOLS = {
+    "fleet_overview", "fleet_list_agents", "fleet_get_config", "query_metrics",
+    "query_logs", "get_guardrails", "list_proposals", "get_proposal",
+    "propose_config_change",
+}
+
+
 def test_mcp_server_cannot_apply():
-    """The MCP surface must contain no approve/apply/rollout tool."""
-    src = open(os.path.join(os.path.dirname(__file__), "..",
-                            "mcp_server", "server.py")).read()
-    assert "start_rollout" not in src
-    assert "apply_patch" not in src
-    # exactly one write-shaped tool
-    assert src.count("def propose_config_change") == 1
+    """The MCP surface must contain no approve/apply/rollout tool.
+
+    Checked on the *registered* tools and the module's imports/calls — not by
+    grepping source, which `getattr(rollout, "start_" + "rollout")` defeats."""
+    import ast
+    import asyncio
+    import mcp_server.server as srv
+
+    tools = asyncio.run(srv.mcp.list_tools())
+    assert {t.name for t in tools} == EXPECTED_MCP_TOOLS
+    for t in tools:
+        if t.name == "propose_config_change":
+            assert t.annotations.readOnlyHint is False
+            assert t.annotations.destructiveHint is False
+        else:
+            assert t.annotations.readOnlyHint is True, t.name
+
+    tree = ast.parse(open(srv.__file__).read())
+    imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)} | {
+        a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert not any(m and (m.startswith("control_plane.rollout") or m.startswith("cli"))
+                   for m in imported)
+    called = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    called |= {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert not called & {"apply_patch", "rollback", "start_rollout", "manual_rollback",
+                         "getattr", "__import__", "import_module"}
 
 
 def test_mcp_server_imports():
@@ -262,6 +290,57 @@ def server(env, monkeypatch):
     monkeypatch.setattr(srv, "_store", store)
     monkeypatch.setattr(srv, "_fleet", fleet)
     return srv
+
+
+def _call(server, tool, args):
+    import asyncio
+    content, _ = asyncio.run(server.mcp.call_tool(tool, args))
+    return json.loads(content[0].text)
+
+
+def test_propose_via_mcp_creates_pending_proposal_and_audit(env, server):
+    """The real propose path: typed args through MCP, policy, store, audit."""
+    store, fleet = env
+    out = _call(server, "propose_config_change", {
+        "reason": "Mitigate checkout sku_id cardinality explosion",
+        "selector": DEMO_SELECTOR,
+        "config_patch": TRANSFORM_PATCH,
+        "evidence": ["query_metrics: checkout 8x", "query_logs: WARN sku_id"],
+    })
+    assert out["status"] == "pending_approval" and out["matched_agents"] > 0
+    assert "approve" not in out["next_step"].split("human")[0]  # never told to self-approve
+    p = store.get_proposal(out["proposal_id"])
+    assert p["author"] == "ai-agent:mcp" and p["status"] == "pending_approval"
+    assert all(a.config_version == 1 for a in fleet.agents())  # nothing applied
+    created = [e for e in store.audit_log(10) if e["action"] == "proposal.created"]
+    assert created and created[0]["detail"]["proposal_id"] == out["proposal_id"]
+
+
+def test_propose_via_mcp_records_policy_rejection(env, server):
+    store, _ = env
+    out = _call(server, "propose_config_change", {
+        "reason": "Route telemetry somewhere cheaper, observed cost spike",
+        "selector": DEMO_SELECTOR,
+        "config_patch": {"exporters": {"otlphttp": {"endpoint": "https://evil.example.com"}}},
+        "evidence": ["query_metrics: volume up"],
+    })
+    assert out["status"] == "policy_rejected"
+    assert store.get_proposal(out["proposal_id"])["status"] == "policy_rejected"
+
+
+@pytest.mark.parametrize("selector", [{}, {"labels": {}}, {"all": True, "agent_ids": ["x"]}])
+def test_empty_or_ambiguous_selector_rejected(env, selector):
+    _, verdict = _make_proposal(env, selector=selector)
+    assert not verdict.allowed
+    assert any("exactly one" in r for r in verdict.reasons)
+
+
+def test_propose_via_mcp_rejects_wrong_types(env, server):
+    from mcp.server.fastmcp.exceptions import ToolError
+    with pytest.raises(ToolError):
+        _call(server, "propose_config_change", {
+            "reason": "x" * 30, "selector": DEMO_SELECTOR,
+            "config_patch": "not an object", "evidence": ["e"]})
 
 
 def test_mcp_reads_do_not_leak_the_scenario(env, server):

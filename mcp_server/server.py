@@ -18,9 +18,14 @@ Via Claude Code:     .mcp.json in the repo root registers this server.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import Field
+# typing_extensions (a dependency of mcp/pydantic): pydantic needs its
+# TypedDict on Python < 3.12 to build the tool's JSON schema.
+from typing_extensions import TypedDict
 
 from control_plane.fleet import get_fleet
 from control_plane.models import ConfigProposal
@@ -43,6 +48,22 @@ _fleet = get_fleet(_store)
 AGENT_ACTOR = "ai-agent:mcp"
 
 
+# Tool annotations are MCP's machine-readable statement of intent. Every read
+# tool says it is read-only; the one write-shaped tool says it is additive
+# (creates a proposal) and not destructive.
+READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+PROPOSE = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                          idempotentHint=False, openWorldHint=False)
+
+
+class Selector(TypedDict, total=False):
+    """Exactly one of: labels (ANDed; `service` matches hosted services),
+    agent_ids, or all."""
+    labels: dict[str, str]
+    agent_ids: list[str]
+    all: bool
+
+
 def _j(obj: Any) -> str:
     return json.dumps(obj, indent=2, default=str)
 
@@ -51,7 +72,7 @@ def _j(obj: Any) -> str:
 # Read tools
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 def fleet_overview() -> str:
     """Summarize the collector fleet: sizes by env/region/tier, health, and
     total active series. Start here."""
@@ -73,7 +94,7 @@ def fleet_overview() -> str:
     })
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 def fleet_list_agents(env: str | None = None, region: str | None = None,
                       service: str | None = None, limit: int = 20) -> str:
     """List agents, optionally filtered by env, region, or hosted service."""
@@ -93,7 +114,7 @@ def fleet_list_agents(env: str | None = None, region: str | None = None,
     ] + ([{"truncated": len(agents) - limit}] if len(agents) > limit else []))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 def fleet_get_config(agent_id: str) -> str:
     """Fetch one agent's full effective collector configuration."""
     a = _fleet.get_agent(agent_id)
@@ -104,7 +125,7 @@ def fleet_get_config(agent_id: str) -> str:
                "config": a.config})
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 def query_metrics(metric: str = "active_series", group_by: str = "service",
                   window_minutes: int = 60, step_minutes: int = 5) -> str:
     """Query fleet telemetry metrics over time.
@@ -130,7 +151,7 @@ def query_metrics(metric: str = "active_series", group_by: str = "service",
                "points": _fleet.series_history(window_minutes * 60, step_minutes * 60)})
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 def query_logs(service: str | None = None, limit: int = 20) -> str:
     """Fetch recent log lines, optionally for one service. WARN/ERROR lines
     often name the label or upstream causing trouble — cite them as evidence.
@@ -138,7 +159,7 @@ def query_logs(service: str | None = None, limit: int = 20) -> str:
     return _j(_fleet.recent_logs(service=service, limit=limit))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 def get_guardrails() -> str:
     """Show the policy contract governing what you may propose: allowed and
     forbidden config paths, canary limits, and evidence requirements. Read
@@ -147,7 +168,7 @@ def get_guardrails() -> str:
     return _j(load_policy())
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 def list_proposals(status: str | None = None) -> str:
     """List config proposals (optionally by status: pending_approval,
     applied, rolled_back, rejected, policy_rejected)."""
@@ -157,7 +178,7 @@ def list_proposals(status: str | None = None) -> str:
     ])
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 def get_proposal(proposal_id: str) -> str:
     """Fetch a proposal in full, including its policy verdict and (if
     approved) rollout status and verification results."""
@@ -174,45 +195,39 @@ def get_proposal(proposal_id: str) -> str:
 # The single write-shaped tool
 
 
-@mcp.tool()
-def propose_config_change(reason: str, selector_json: str, config_patch_json: str,
-                          evidence_json: str) -> str:
+@mcp.tool(annotations=PROPOSE)
+def propose_config_change(
+    reason: Annotated[str, Field(min_length=1, description=(
+        "Why this change is needed (min 20 chars). Reference what you observed, "
+        'e.g. "checkout active series grew 8x due to sku_id label".'))],
+    selector: Annotated[Selector, Field(description=(
+        'Target agents: {"labels": {"service": "checkout", "tier": "standard"}} | '
+        '{"agent_ids": ["otelcol-0001"]} | {"all": true}. The matched set must not '
+        "include agents with a protected label (see get_guardrails)."))],
+    config_patch: Annotated[dict[str, Any], Field(description=(
+        "JSON merge patch onto the agent config. Only telemetry-shaping "
+        "processors and pipeline processor lists (see get_guardrails)."))],
+    evidence: Annotated[list[str], Field(description=(
+        "The queries/observations that justify the change."))],
+) -> str:
     """Propose a fleet configuration change for HUMAN review. Nothing is
-    applied by this tool.
+    applied by this tool, and you cannot approve it.
 
-    Args:
-        reason: Why this change is needed (min 20 chars). Reference what you
-            observed, e.g. "checkout active series grew 8x due to sku_id label".
-        selector_json: JSON selector for target agents. One of:
-            {"labels": {"env": "prod"}} | {"labels": {"service": "checkout"}} |
-            {"agent_ids": ["otelcol-0001"]} | {"all": true}
-            Labels are ANDed. The matched set must not include agents with a
-            protected label (see get_guardrails) — add e.g. "tier": "standard".
-        config_patch_json: JSON merge patch onto agent config. Only telemetry-
-            shaping processors are allowed (see get_guardrails). Prefer
-            stripping an offending label over dropping the data. Example:
-            {"processors": {"transform/strip-sku": {"metric_statements": [
-              {"context": "datapoint", "statements": ["delete_key(attributes,
-              \\"sku_id\\") where resource.attributes[\\"service.name\\"] ==
-              \\"checkout\\""]}]}},
-             "service": {"pipelines": {"metrics": {"processors":
-              ["batch", "transform/strip-sku"]}}}}
-            Lists are replaced wholesale (JSON merge patch): a pipeline's new
-            processors list must keep the processors already in it.
-        evidence_json: JSON list of strings — the queries/observations that
-            justify the change.
+    Prefer stripping an offending label over dropping the data. Example
+    config_patch:
+        {"processors": {"transform/strip-sku": {"metric_statements": [
+          {"context": "datapoint", "statements": ["delete_key(attributes,
+          \\"sku_id\\") where resource.attributes[\\"service.name\\"] ==
+          \\"checkout\\""]}]}},
+         "service": {"pipelines": {"metrics": {"processors":
+          ["batch", "transform/strip-sku"]}}}}
+    Lists are replaced wholesale (JSON merge patch): a pipeline's new
+    processors list must keep the processors already in it.
 
     Returns the proposal with its policy verdict. If policy rejects it, fix
     the patch and propose again; do not attempt to widen your access.
     """
-    try:
-        selector = json.loads(selector_json)
-        config_patch = json.loads(config_patch_json)
-        evidence = json.loads(evidence_json)
-        assert isinstance(evidence, list)
-    except Exception as e:  # noqa: BLE001
-        return _j({"error": f"Malformed JSON argument: {e}"})
-
+    selector = dict(selector)
     targets = _fleet.select(selector)
     verdict = validate_proposal(
         config_patch=config_patch, selector=selector, targets=targets,
@@ -239,8 +254,8 @@ def propose_config_change(reason: str, selector_json: str, config_patch_json: st
         "policy_verdict": proposal.policy_verdict,
         "matched_agents": matched,
         "next_step": (
-            "Awaiting human review: run `python3 -m cli.ctl list` then "
-            f"`python3 -m cli.ctl approve {proposal.proposal_id}`."
+            "Awaiting human review. Tell the operator the proposal id; a human "
+            "approves it outside this toolset. Track it with get_proposal."
             if verdict.allowed else
             "Rejected by policy. Read the reasons, adjust, and re-propose."
         ),
