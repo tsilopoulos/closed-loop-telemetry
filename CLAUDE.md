@@ -33,6 +33,7 @@ modeling an OpAMP-managed fleet.
 ## Commands
 
 ```bash
+make setup       # .venv + requirements-dev.txt (required by .mcp.json)
 make test        # pytest
 make demo        # trigger cardinality explosion + print fleet state
 make reset       # wipe .state/
@@ -71,7 +72,8 @@ session the `otel-fleet` tools are available directly — you (Claude) are the
 
 ## Conventions
 
-- Python 3.12, stdlib + `mcp` + `pyyaml` only (keep the dependency surface tiny).
+- Python 3.11+ (CI runs 3.11–3.14), stdlib + `mcp` (<2) + `pyyaml` only (keep the
+  dependency surface tiny). `pytest` lives in `requirements-dev.txt`.
 - Type hints everywhere; dataclasses for domain models; JSON-serializable state.
 - New guardrails need: a yaml knob, enforcement in policy.py or rollout.py,
   and a test.
