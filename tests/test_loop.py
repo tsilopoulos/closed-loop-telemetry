@@ -151,6 +151,70 @@ def test_ai_cannot_approve(env):
         start_rollout(store, fleet, p.proposal_id, approver="ai-agent:mcp")
 
 
+@pytest.mark.parametrize("approver", ["claude", "Ai-Agent:x", "", "human:", "agent:human:x"])
+def test_only_human_prefixed_approvers(env, approver):
+    """Approval is an allowlist on `human:<name>`, not a denylist on ai-agent."""
+    store, fleet = env
+    p, _ = _make_proposal(env)
+    with pytest.raises(RolloutError, match="human"):
+        start_rollout(store, fleet, p.proposal_id, approver=approver)
+
+
+def test_policy_change_invalidates_pending_verdicts(env, tmp_path, monkeypatch):
+    """A verdict is honoured only under the policy that issued it."""
+    import shutil
+    from control_plane import policy as policy_mod
+    store, fleet = env
+    pol = tmp_path / "guardrails.yaml"
+    shutil.copy(policy_mod.DEFAULT_POLICY_PATH, pol)
+    monkeypatch.setattr(policy_mod, "DEFAULT_POLICY_PATH", str(pol))
+    p, verdict = _make_proposal(env)
+    assert verdict.allowed and verdict.policy_sha256
+    pol.write_text(pol.read_text() + "\n# tightened\n")
+    with pytest.raises(RolloutError, match="changed since"):
+        start_rollout(store, fleet, p.proposal_id, approver="human:tester")
+
+
+def _approve_args(pid):
+    import argparse
+    return argparse.Namespace(proposal_id=pid, as_user=None)
+
+
+def test_ctl_approve_refuses_without_tty(env, monkeypatch):
+    """No TTY (e.g. an agent's shell tool) and no --yes: approval is refused."""
+    from cli import ctl
+    store, fleet = env
+    p, _ = _make_proposal(env)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    with pytest.raises(SystemExit, match="interactive"):
+        ctl.cmd_approve(store, fleet, _approve_args(p.proposal_id))
+    assert store.get_proposal(p.proposal_id)["status"] == "pending_approval"
+
+
+def test_ctl_approve_refuses_uncommitted_policy(env, monkeypatch):
+    from cli import ctl
+    store, fleet = env
+    p, _ = _make_proposal(env)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(ctl, "policy_uncommitted", lambda: True)
+    with pytest.raises(SystemExit, match="uncommitted"):
+        ctl.cmd_approve(store, fleet, _approve_args(p.proposal_id))
+
+
+def test_ctl_approve_requires_typed_confirmation(env, monkeypatch):
+    from cli import ctl
+    store, fleet = env
+    p, _ = _make_proposal(env)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(ctl, "policy_uncommitted", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    ctl.cmd_approve(store, fleet, _approve_args(p.proposal_id))
+    assert store.get_proposal(p.proposal_id)["status"] == "pending_approval"
+    monkeypatch.setattr("builtins.input", lambda _: p.proposal_id[-4:])
+    ctl.cmd_approve(store, fleet, _approve_args(p.proposal_id))
+    assert store.get_proposal(p.proposal_id)["status"] == "applied"
+
+
 def test_policy_rejected_proposal_can_never_roll_out(env):
     store, fleet = env
     patch = {"exporters": {"otlphttp": {"endpoint": "https://evil.example.com"}}}

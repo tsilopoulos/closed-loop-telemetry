@@ -17,7 +17,9 @@ may touch are reviewable in version control like any other config change.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import subprocess
 from typing import Any
 
 import yaml
@@ -33,6 +35,27 @@ DEFAULT_POLICY_PATH = os.environ.get(
 def load_policy(path: str | None = None) -> dict[str, Any]:
     with open(path or DEFAULT_POLICY_PATH) as f:
         return yaml.safe_load(f)
+
+
+def policy_fingerprint(path: str | None = None) -> str:
+    """sha256 of the policy file. Recorded in every verdict and re-checked at
+    approval, so a verdict is only honoured under the policy that issued it."""
+    with open(path or DEFAULT_POLICY_PATH, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def policy_uncommitted(path: str | None = None) -> bool | None:
+    """True if the policy file differs from git HEAD (e.g. an agent with file
+    access edited it), None if git can't tell (not a checkout, no git)."""
+    path = os.path.abspath(path or DEFAULT_POLICY_PATH)
+    try:
+        r = subprocess.run(
+            ["git", "status", "--porcelain", "--", os.path.basename(path)],
+            cwd=os.path.dirname(path), capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return bool(r.stdout.strip()) if r.returncode == 0 else None
 
 
 def _collect_paths(patch: dict[str, Any], prefix: str = "") -> list[str]:
@@ -85,6 +108,7 @@ def validate_proposal(
     policy: dict[str, Any] | None = None,
 ) -> PolicyVerdict:
     """`targets` is the fleet's resolution of `selector` at proposal time."""
+    policy_is_default = policy is None
     policy = policy or load_policy()
     reasons: list[str] = []
     touched = _collect_paths(config_patch)
@@ -130,7 +154,8 @@ def validate_proposal(
             "only non-protected agents carry."
         )
 
-    return PolicyVerdict(allowed=not reasons, reasons=reasons, touched_paths=touched)
+    return PolicyVerdict(allowed=not reasons, reasons=reasons, touched_paths=touched,
+                         policy_sha256=policy_fingerprint() if policy_is_default else None)
 
 
 def canary_size(matched: int, policy: dict[str, Any] | None = None) -> int:

@@ -24,7 +24,8 @@ modeling an OpAMP-managed fleet.
 
 1. The MCP server must never gain a tool that applies, approves, or rolls out
    config. `tests/test_loop.py::test_mcp_server_cannot_apply` pins this.
-2. `start_rollout` must reject non-human approvers.
+2. `start_rollout` must reject non-human approvers (allowlist: `human:<name>`)
+   and verdicts issued under a different guardrails.yaml than the current one.
 3. Every mutation goes through the policy engine and is audit-logged.
 4. `policy/guardrails.yaml` changes are treated like production config review.
 5. Keep everything vendor-neutral at the protocol level (OTLP, OpAMP, MCP);
@@ -48,7 +49,7 @@ session the `otel-fleet` tools are available directly — you (Claude) are the
 ## Demo script (for the talk)
 
 1. `make reset && make demo` — checkout series jump ~8x.
-2. In Claude Code: "Something is wrong with our telemetry volume. Investigate
+2. `make agent` (Claude Code restricted to the otel-fleet MCP tools): "Something is wrong with our telemetry volume. Investigate
    and fix it." → agent uses fleet_overview / query_metrics / query_logs,
    reads get_guardrails, calls propose_config_change.
 3. Human: `python3 -m cli.ctl show <id>` then `approve <id>` — watch canary →

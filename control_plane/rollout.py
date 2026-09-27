@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from .models import ConfigProposal, Rollout, new_id, now
-from .policy import canary_size, load_policy, protected_targets
+from .policy import canary_size, load_policy, policy_fingerprint, protected_targets
 from .store import Store
 
 
@@ -32,10 +32,18 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
         raise RolloutError(
             f"Proposal {proposal_id} is '{proposal.status}', not pending_approval."
         )
-    if not (proposal.policy_verdict or {}).get("allowed"):
+    verdict = proposal.policy_verdict or {}
+    if not verdict.get("allowed"):
         raise RolloutError("Proposal failed policy validation and can never be applied.")
-    if approver.startswith("ai-agent"):
-        raise RolloutError("Approval requires a human actor. This is the point.")
+    # Allowlist, not denylist: "claude", "Ai-Agent:x" or "" must not pass.
+    if not approver.startswith("human:") or len(approver) <= len("human:"):
+        raise RolloutError(
+            f"Approval requires a human actor ('human:<name>'), got {approver!r}. "
+            "This is the point.")
+    if verdict.get("policy_sha256") != policy_fingerprint():
+        raise RolloutError(
+            "guardrails.yaml changed since this proposal was validated; "
+            "the verdict no longer applies. Re-propose under the current policy.")
 
     policy = load_policy()
     matched = fleet.select(proposal.selector)
