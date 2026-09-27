@@ -1,4 +1,4 @@
-.PHONY: setup test demo reset mcp
+.PHONY: setup test demo reset mcp agent
 
 # Use the project venv by default; override with `make test PYTHON=python3`.
 # .mcp.json also points at .venv/bin/python, so run `make setup` once.
@@ -19,3 +19,9 @@ reset:
 
 mcp:
 	$(PYTHON) -m mcp_server.server
+
+# The on-stage agent: Claude Code with the otel-fleet MCP tools and nothing
+# else (no shell, no file edits), so it cannot reach `ctl approve` or edit
+# guardrails.yaml. See .claude/agent-sandbox.json.
+agent:
+	claude --settings .claude/agent-sandbox.json --strict-mcp-config --mcp-config .mcp.json

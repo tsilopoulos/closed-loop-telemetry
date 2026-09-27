@@ -1,0 +1,6 @@
+{
+  "permissions": {
+    "allow": ["mcp__otel-fleet"],
+    "deny": ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"]
+  }
+}
