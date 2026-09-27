@@ -28,6 +28,10 @@ preserve_pipeline_processors: true
 
 # Proposals must cite the telemetry that motivated them.
 require_evidence: true
+evidence:
+  require_receipts: true    # cite receipts issued by real read-tool calls
+  require_telemetry: true   # at least one from query_metrics / query_logs
+  max_age_minutes: 60       # judged at proposal time
 min_reason_length: 20
 
 # Rollout limits

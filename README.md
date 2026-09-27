@@ -60,7 +60,7 @@ would — OpAMP `RemoteConfigStatus: FAILED` with the collector's error — →
 | Gate | Where | What it stops |
 |---|---|---|
 | Path allowlist/denylist | `policy/guardrails.yaml` | Agent touching exporters, receivers, auth, or deleting/rewiring pipelines — only telemetry-shaping processors and pipeline processor lists are proposable |
-| Evidence requirement | policy engine | Proposals not grounded in observed telemetry |
+| Evidence receipts | policy engine | Proposals not grounded in observed telemetry — evidence must cite receipts the MCP server issued for real reads (the human sees what the query returned, not the agent's paraphrase) |
 | Protected labels | policy engine + rollout engine | Reaching payment-critical agents at all — checked on the agents a selector resolves to, at propose and again at approve time |
 | Human approval | `cli/ctl.py` only | Autonomous application — no MCP tool for it; approver must be `human:<name>`, interactive, typed confirmation, under the exact (committed) policy that validated the proposal |
 | Canary cap (≤5%) | rollout engine | Fleet-wide blast radius on first contact |

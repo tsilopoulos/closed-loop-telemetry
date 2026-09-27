@@ -79,6 +79,9 @@ The agent is treated as a capable but untrusted operator:
 - It cannot go big fast: canary cap + verification + auto-rollback bound the
   blast radius even of an approved bad idea.
 - Everything it does is attributable: author + evidence + audit log.
+- It cannot invent evidence: every read tool returns an `evidence_receipt`
+  and stores what it actually returned; proposals must cite fresh receipts,
+  including at least one telemetry query, and `ctl approve` prints them.
 
 Residual risks (talk material, not solved here): prompt injection via
 telemetry content read by the agent (log lines are untrusted input!),

@@ -123,6 +123,14 @@ class Store:
         row = self._conn.execute("SELECT json FROM kv WHERE key=?", (key,)).fetchone()
         return json.loads(row[0]) if row else default
 
+    # -- evidence receipts ------------------------------------------------------
+
+    def put_receipt(self, r: dict[str, Any]) -> None:
+        self.put_kv(f"receipt:{r['receipt_id']}", r)
+
+    def get_receipt(self, receipt_id: str) -> dict[str, Any] | None:
+        return self.get_kv(f"receipt:{receipt_id}")
+
     # -- audit -----------------------------------------------------------------
 
     def audit(self, actor: str, action: str, detail: dict[str, Any]) -> None:
