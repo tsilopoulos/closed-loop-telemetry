@@ -2,7 +2,9 @@
 
 This is the *entire* surface an AI agent gets. Design rules:
 
-1. Read tools are broad: fleet inventory, configs, metrics, logs, scenario.
+1. Read tools are broad: fleet inventory, configs, metrics, logs. They expose
+   what a real backend would — never the sim's scenario state, which would
+   hand the agent the answer instead of making it investigate.
 2. There is exactly one write-shaped tool: `propose_config_change`. It
    creates a proposal for human review. It never touches an agent.
 3. There is NO tool that approves or applies anything. Approval lives in
@@ -51,21 +53,23 @@ def _j(obj: Any) -> str:
 
 @mcp.tool()
 def fleet_overview() -> str:
-    """Summarize the collector fleet: sizes by env/region, health, and any
-    active scenario. Start here."""
+    """Summarize the collector fleet: sizes by env/region/tier, health, and
+    total active series. Start here."""
     agents = _fleet.agents()
-    by_env: dict[str, int] = {}
+    counts: dict[str, dict[str, int]] = {"env": {}, "region": {}, "tier": {}}
     unhealthy = []
     for a in agents:
-        by_env[a.labels.get("env", "?")] = by_env.get(a.labels.get("env", "?"), 0) + 1
+        for k, c in counts.items():
+            v = a.labels.get(k, "?")
+            c[v] = c.get(v, 0) + 1
         if not a.healthy:
             unhealthy.append(a.agent_id)
     return _j({
         "total_agents": len(agents),
-        "by_env": by_env,
+        **{f"by_{k}": c for k, c in counts.items()},
         "unhealthy_agents": unhealthy,
-        "active_scenario": _fleet.scenario(),
-        "note": "Use query_metrics to inspect series counts per service.",
+        "total_active_series": sum(_fleet.series_by_service().values()),
+        "note": "Use query_metrics to see series per service over time.",
     })
 
 
@@ -99,20 +103,29 @@ def fleet_get_config(agent_id: str) -> str:
 
 
 @mcp.tool()
-def query_metrics(metric: str = "active_series", group_by: str = "service") -> str:
-    """Query fleet telemetry metrics.
+def query_metrics(metric: str = "active_series", group_by: str = "service",
+                  window_minutes: int = 60, step_minutes: int = 5) -> str:
+    """Query fleet telemetry metrics over time.
 
-    Supported: metric='active_series', group_by='service' — total active
-    metric series per service across the fleet. A sudden multiple-x jump for
-    one service indicates a cardinality explosion.
+    metric='active_series' is supported. group_by='service' returns a time
+    series of active metric series per service over the last
+    `window_minutes` (compare early and late points to spot a change);
+    group_by='agent' returns the current top agents by series.
     (Real deployment: this proxies PromQL to the metrics backend; see backends/.)
     """
-    if metric != "active_series" or group_by != "service":
-        return _j({"error": "This reference build supports metric='active_series', "
-                            "group_by='service' only."})
-    return _j({"metric": metric, "by_service": _fleet.series_by_service(),
-               "baseline_per_agent": "checkout=1200 inventory=900 fulfillment=800 "
-                                     "order-mgmt=1000 search=700 (multiply by hosting agents)"})
+    if metric != "active_series" or group_by not in {"service", "agent"}:
+        return _j({"error": "Supported: metric='active_series', "
+                            "group_by='service' | 'agent'."})
+    if group_by == "agent":
+        per_agent = sorted(
+            ((a.agent_id, _fleet.series_for_agents([a.agent_id])) for a in _fleet.agents()),
+            key=lambda x: -x[1])
+        return _j({"metric": metric, "top_agents": [
+            {"agent_id": aid, "active_series": n} for aid, n in per_agent[:10]]})
+    window_minutes = max(1, min(window_minutes, 24 * 60))
+    step_minutes = max(1, min(step_minutes, window_minutes))
+    return _j({"metric": metric, "group_by": "service",
+               "points": _fleet.series_history(window_minutes * 60, step_minutes * 60)})
 
 
 @mcp.tool()

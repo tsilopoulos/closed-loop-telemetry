@@ -34,6 +34,8 @@ from .store import Store
 
 FLEET_KEY = "fleet"
 SCENARIO_KEY = "scenario"
+HISTORY_KEY = "series_history"
+HISTORY_MAX = 500
 
 SERVICES = ["checkout", "inventory", "fulfillment", "order-mgmt", "search"]
 REGIONS = ["us-east-1", "eu-west-1", "ap-southeast-1"]
@@ -166,6 +168,8 @@ class SimulatedFleet:
             agents[agent.agent_id] = agent.to_dict()
         self.store.put_kv(FLEET_KEY, agents)
         self.store.put_kv(SCENARIO_KEY, {"active": None})
+        self.store.put_kv(HISTORY_KEY, [])
+        self._record()
 
     def reset(self, size: int = 60, seed: int = 7) -> None:
         self._bootstrap(size, seed)
@@ -207,6 +211,29 @@ class SimulatedFleet:
 
     def set_scenario(self, scenario: dict[str, Any]) -> None:
         self.store.put_kv(SCENARIO_KEY, scenario)
+        self._record()
+
+    # -- history: the sim's stand-in for a metrics backend's time dimension --
+
+    def _record(self) -> None:
+        """Snapshot per-service series whenever the model changes, so queries
+        can show *when* something moved rather than just its current value."""
+        hist = self.store.get_kv(HISTORY_KEY, [])
+        hist.append({"ts": time.time(), "by_service": self.series_by_service()})
+        self.store.put_kv(HISTORY_KEY, hist[-HISTORY_MAX:])
+
+    def series_history(self, window_s: int, step_s: int) -> list[dict[str, Any]]:
+        """Step-function series per service over [now - window, now]."""
+        hist = self.store.get_kv(HISTORY_KEY, []) or [
+            {"ts": 0.0, "by_service": self.series_by_service()}]
+        t_now = time.time()
+        points, i = [], 0
+        for k in range(window_s // step_s, -1, -1):
+            t = t_now - k * step_s
+            while i + 1 < len(hist) and hist[i + 1]["ts"] <= t:
+                i += 1
+            points.append({"ts": round(t), "by_service": hist[i]["by_service"]})
+        return points
 
     def _service_multiplier(self, service: str) -> float:
         sc = self.scenario()
@@ -284,6 +311,7 @@ class SimulatedFleet:
             a.healthy = "__break__" not in str(patch)
             raw[aid] = a.to_dict()
         self.store.put_kv(FLEET_KEY, raw)
+        self._record()
 
     def rollback(self, agent_ids: list[str]) -> None:
         raw = self.store.get_kv(FLEET_KEY, {})
@@ -296,6 +324,7 @@ class SimulatedFleet:
             a.healthy = True
             raw[aid] = a.to_dict()
         self.store.put_kv(FLEET_KEY, raw)
+        self._record()
 
 
 def get_fleet(store: Store):
