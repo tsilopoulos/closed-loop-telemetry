@@ -56,7 +56,17 @@ architecture.
 The agent is treated as a capable but untrusted operator:
 
 - It cannot reach the fleet: no apply tool exists in its surface (test-pinned).
-- It cannot approve: the rollout engine rejects non-human actors.
+- It cannot approve: the rollout engine only accepts `human:<name>` approvers,
+  and `ctl approve` is interactive-only with a typed confirmation.
+- Its surface must be MCP *only*. "No apply tool" means nothing if the same
+  agent also has a shell: it could run `ctl approve` or edit the policy
+  itself. `make agent` runs Claude Code with the otel-fleet tools and nothing
+  else. The TTY/confirmation checks are speed bumps (a same-user process can
+  fake a TTY); the real boundary in production is identity — approvals from a
+  principal the agent can't act as.
+- It cannot move the goalposts: each verdict records the policy's sha256; a
+  proposal validated under a different guardrails.yaml can't be approved, and
+  `ctl approve` refuses while the policy file has uncommitted changes.
 - It cannot redirect telemetry: `exporters` is denylisted — exfiltration via
   config change is the scenario this rule exists for.
 - It cannot touch ingestion or auth: `receivers`, `extensions` denylisted.

@@ -70,6 +70,7 @@ class PolicyVerdict:
     allowed: bool
     reasons: list[str] = field(default_factory=list)
     touched_paths: list[str] = field(default_factory=list)
+    policy_sha256: str | None = None  # fingerprint of the policy that decided
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

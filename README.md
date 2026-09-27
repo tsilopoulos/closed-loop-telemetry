@@ -36,7 +36,8 @@ Then run the loop:
 
 ```bash
 # 1. The AI agent side — connect any MCP client to mcp_server/server.py.
-#    With Claude Code, just open this repo: .mcp.json registers the server.
+#    With Claude Code: `make agent` starts it with the otel-fleet tools ONLY
+#    (no shell, no file edits — see .claude/agent-sandbox.json).
 #    Prompt: "Telemetry volume looks wrong. Investigate and fix it."
 #    The agent will query metrics/logs, read the guardrails, and call
 #    propose_config_change. Nothing is applied.
@@ -44,7 +45,7 @@ Then run the loop:
 # 2. The human side:
 python3 -m cli.ctl list
 python3 -m cli.ctl show <proposal-id>
-python3 -m cli.ctl approve <proposal-id>     # canary → verify → promote
+python3 -m cli.ctl approve <proposal-id>     # interactive; canary → verify → promote
 python3 -m cli.ctl audit                     # the full trail
 ```
 
@@ -59,7 +60,7 @@ Failure paths worth demoing: propose an `exporters` change (**policy_rejected**
 | Path allowlist/denylist | `policy/guardrails.yaml` | Agent touching exporters, receivers, auth, or deleting/rewiring pipelines — only telemetry-shaping processors and pipeline processor lists are proposable |
 | Evidence requirement | policy engine | Proposals not grounded in observed telemetry |
 | Protected labels | policy engine + rollout engine | Reaching payment-critical agents at all — checked on the agents a selector resolves to, at propose and again at approve time |
-| Human approval | `cli/ctl.py` only | Autonomous application — there is structurally no MCP tool for it |
+| Human approval | `cli/ctl.py` only | Autonomous application — no MCP tool for it; approver must be `human:<name>`, interactive, typed confirmation, under the exact (committed) policy that validated the proposal |
 | Canary cap (≤5%) | rollout engine | Fleet-wide blast radius on first contact |
 | Verification gates | rollout engine | Promoting configs that hurt — both directions: unhealthy canaries, series increase, *and* any service dropping below 50% of baseline (over-broad filters, pipelines that stop delivering) |
 | Auto-rollback + audit log | rollout engine / store | Silent failures and unaccountable changes |

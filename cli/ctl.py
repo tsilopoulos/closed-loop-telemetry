@@ -5,7 +5,7 @@ rollout. The AI agent's MCP server has no equivalent.
 
     python3 -m cli.ctl list [--status pending_approval]
     python3 -m cli.ctl show <proposal-id>
-    python3 -m cli.ctl approve <proposal-id> [--as you@example.com]
+    python3 -m cli.ctl approve <proposal-id> [--as you@example.com]   (interactive only)
     python3 -m cli.ctl reject <proposal-id> --note "why"
     python3 -m cli.ctl rollback <rollout-id>
     python3 -m cli.ctl audit [--limit 30]
@@ -22,6 +22,7 @@ from datetime import datetime
 
 from control_plane.fleet import get_fleet
 from control_plane.models import now
+from control_plane.policy import policy_uncommitted
 from control_plane.rollout import RolloutError, manual_rollback, start_rollout
 from control_plane.store import Store
 
@@ -54,7 +55,17 @@ def cmd_show(store: Store, args) -> None:
 
 
 def cmd_approve(store: Store, fleet, args) -> None:
-    approver = args.as_user or _human()
+    approver = f"human:{args.as_user}" if args.as_user else _human()
+    # Speed bumps, not a security boundary: an agent running as your OS user
+    # can fake a TTY. The boundary is giving the agent MCP tools only
+    # (`make agent`, .claude/agent-sandbox.json). These make the unsafe path
+    # loud instead of one flag away.
+    if not sys.stdin.isatty():
+        sys.exit("Refused: approval is interactive only (no TTY). "
+                 "Approvals are a human decision; there is no --yes.")
+    if policy_uncommitted():
+        sys.exit("Refused: policy/guardrails.yaml has uncommitted changes. "
+                 "Guardrail changes go through review before they govern approvals.")
     p = store.get_proposal(args.proposal_id)
     if not p:
         sys.exit(f"No proposal {args.proposal_id}")
@@ -64,11 +75,12 @@ def cmd_approve(store: Store, fleet, args) -> None:
     print(f"  Selector: {json.dumps(p['selector'])}")
     print(f"  Patch:    {json.dumps(p['config_patch'])[:400]}")
     print(f"  Evidence: {json.dumps(p['evidence'])[:400]}")
-    if not args.yes:
-        answer = input("Approve and start canary rollout? [y/N] ").strip().lower()
-        if answer != "y":
-            print("Aborted.")
-            return
+    # Typing part of the id (not "y") forces a look at *which* proposal.
+    confirm = p["proposal_id"][-4:]
+    answer = input(f"Type '{confirm}' to approve and start the canary rollout: ").strip()
+    if answer != confirm:
+        print("Aborted.")
+        return
     try:
         rollout = start_rollout(store, fleet, args.proposal_id, approver)
     except RolloutError as e:
@@ -130,7 +142,7 @@ def main() -> None:
     p = sub.add_parser("list"); p.add_argument("--status")
     p = sub.add_parser("show"); p.add_argument("proposal_id")
     p = sub.add_parser("approve"); p.add_argument("proposal_id")
-    p.add_argument("--as", dest="as_user"); p.add_argument("--yes", action="store_true")
+    p.add_argument("--as", dest="as_user", help="approver name (recorded as human:<name>)")
     p = sub.add_parser("reject"); p.add_argument("proposal_id")
     p.add_argument("--note", default="")
     p = sub.add_parser("rollback"); p.add_argument("rollout_id")
