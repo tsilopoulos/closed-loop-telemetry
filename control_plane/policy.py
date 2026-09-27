@@ -20,7 +20,8 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
-from typing import Any
+import time
+from typing import Any, Callable
 
 import yaml
 
@@ -98,16 +99,51 @@ def protected_targets(targets: list[AgentInfo],
     ]
 
 
+TELEMETRY_TOOLS = {"query_metrics", "query_logs"}
+
+
+def _evidence_problems(evidence: list[Any], policy: dict[str, Any],
+                       receipts: Callable[[str], dict[str, Any] | None] | None,
+                       as_of: float | None) -> list[str]:
+    """Evidence must cite receipts the server issued for real reads — the
+    agent can't hallucinate a query it never ran."""
+    cfg = policy.get("evidence", {}) or {}
+    if not evidence or not cfg.get("require_receipts", False):
+        return []
+    as_of = as_of or time.time()
+    max_age = float(cfg.get("max_age_minutes", 60)) * 60
+    problems, tools = [], set()
+    for i, item in enumerate(evidence):
+        rid = item.get("receipt_id") if isinstance(item, dict) else None
+        r = receipts(rid) if (rid and receipts) else None
+        if r is None:
+            problems.append(f"Evidence #{i + 1} cites no valid receipt ({rid!r}). "
+                            "Cite the evidence_receipt returned by a read tool.")
+        elif as_of - r["issued_at"] > max_age:
+            problems.append(f"Evidence receipt {rid} is older than "
+                            f"{cfg.get('max_age_minutes', 60)} minutes; re-query.")
+        else:
+            tools.add(r["tool"])
+    if cfg.get("require_telemetry", True) and not problems and not tools & TELEMETRY_TOOLS:
+        problems.append("Evidence must include at least one telemetry query "
+                        f"({', '.join(sorted(TELEMETRY_TOOLS))}).")
+    return problems
+
+
 def validate_proposal(
     *,
     config_patch: dict[str, Any],
     selector: dict[str, Any],
     targets: list[AgentInfo],
-    evidence: list[str],
+    evidence: list[Any],
     reason: str,
     policy: dict[str, Any] | None = None,
+    receipts: Callable[[str], dict[str, Any] | None] | None = None,
+    as_of: float | None = None,
 ) -> PolicyVerdict:
-    """`targets` is the fleet's resolution of `selector` at proposal time."""
+    """`targets` is the fleet's resolution of `selector` at proposal time.
+    `receipts` resolves evidence receipt ids; `as_of` is when the proposal
+    was made (receipt age is judged then, not at approval)."""
     policy_is_default = policy is None
     policy = policy or load_policy()
     reasons: list[str] = []
@@ -139,6 +175,7 @@ def validate_proposal(
             "Proposals must cite telemetry evidence (queries/observations). "
             "Run fleet/metrics queries first and attach what you saw."
         )
+    reasons.extend(_evidence_problems(evidence, policy, receipts, as_of))
     if len(reason.strip()) < int(policy.get("min_reason_length", 20)):
         reasons.append("Reason is too short to justify a production config change.")
 
