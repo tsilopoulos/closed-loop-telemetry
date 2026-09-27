@@ -55,6 +55,10 @@ processor that isn't defined (the canaries reject it exactly like a collector
 would — OpAMP `RemoteConfigStatus: FAILED` with the collector's error — →
 **automatic rollback**).
 
+No network or model on stage? `make replay` plays the agent's side through
+the real MCP tools (including the first, policy-rejected selector), then hands
+you the real interactive `ctl approve`.
+
 Two more scenarios for the talk's "failure modes" and "restraint" beats:
 
 ```bash
