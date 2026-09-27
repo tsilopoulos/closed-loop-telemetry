@@ -1,5 +1,7 @@
 # Closing the Loop
 
+[![ci](https://github.com/tsilopoulos/closed-loop-telemetry/actions/workflows/ci.yml/badge.svg)](https://github.com/tsilopoulos/closed-loop-telemetry/actions/workflows/ci.yml)
+
 Reference implementation for **"Closing the Loop: AI Agents Driving an
 OpenTelemetry Fleet With MCP and OpAMP"** (Observability Summit Europe 2026).
 
@@ -25,8 +27,8 @@ control plane plugs in without touching the agent-facing surface.
 ## Quickstart
 
 ```bash
-pip install "mcp[cli]" pyyaml pytest
-make test                # 9 tests, including the guardrail invariants
+make setup               # .venv + deps (Python 3.11+); .mcp.json uses .venv/bin/python
+make test                # closed-loop + guardrail invariant tests
 make demo                # trigger a cardinality explosion in `checkout`
 ```
 

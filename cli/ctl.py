@@ -5,7 +5,7 @@ rollout. The AI agent's MCP server has no equivalent.
 
     python3 -m cli.ctl list [--status pending_approval]
     python3 -m cli.ctl show <proposal-id>
-    python3 -m cli.ctl approve <proposal-id> [--as you@nike.com]
+    python3 -m cli.ctl approve <proposal-id> [--as you@example.com]
     python3 -m cli.ctl reject <proposal-id> --note "why"
     python3 -m cli.ctl rollback <rollout-id>
     python3 -m cli.ctl audit [--limit 30]

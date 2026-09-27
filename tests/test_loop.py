@@ -116,6 +116,11 @@ def test_mcp_server_cannot_apply():
     assert src.count("def propose_config_change") == 1
 
 
+def test_mcp_server_imports():
+    """A fresh install must yield a server that starts (catches SDK breaks)."""
+    import mcp_server.server  # noqa: F401
+
+
 # ---------------------------------------------------------------------------
 # The closed loop
 

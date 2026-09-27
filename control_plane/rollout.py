@@ -2,7 +2,7 @@
 
 Only `cli/ctl.py approve` calls `start_rollout`. The MCP server has no code
 path into this module's mutating functions — that is checked by a test
-(tests/test_guardrails.py::test_mcp_server_cannot_apply).
+(tests/test_loop.py::test_mcp_server_cannot_apply).
 
 The reference implementation runs the stages synchronously in "sim time".
 The production version of this engine is asynchronous (bake periods between
