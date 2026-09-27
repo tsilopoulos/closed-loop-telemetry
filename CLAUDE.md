@@ -40,6 +40,7 @@ make setup       # .venv + requirements-dev.txt (required by .mcp.json)
 make test        # pytest
 make demo        # trigger cardinality explosion + print fleet state
 make reset       # empty the state DB in place (safe with a running MCP server)
+make replay      # demo fallback: scripted agent over real MCP tools → ctl approve
 python3 -m cli.ctl list|show|approve|reject|rollback|audit|fleet
 python3 -m scenarios.trigger cardinality_explosion --service checkout
 ```
@@ -64,19 +65,31 @@ session the `otel-fleet` tools are available directly — you (Claude) are the
 6. Restraint: `scenarios.trigger traffic_growth` — uniform organic growth; a
    good agent explains why no config change is warranted.
 
-## Roadmap (rough priority order)
+## Roadmap
 
-- [ ] Async rollout engine: bake time between canary/promote waves, poll-based
-      verification instead of synchronous checks.
-- [ ] Implement `OpAMPBridge` against a real OpAMP server management API
-      (opamp-go example server first; then the production control plane).
+Before the talk (each makes a claim on a slide true, or protects the demo):
+
+- [ ] Real OpAMP path, minimal: docker-compose with the opamp-go example
+      server, opampsupervisor and one otelcol-contrib; `OpAMPBridge` against
+      it for `agents`/`apply_patch`/`rollback`. Even one real collector
+      changing config on stage beats a slide saying "this is where it plugs in".
+- [ ] Record the fallback: `asciinema rec -c "make replay"` (and a video).
+- [ ] Rehearse `make agent` end to end against a fresh clone (`make setup`).
+- [ ] Evaluations per mcp-builder practice: 10 read-only Q&A tasks against a
+      seeded fleet (incl. prompt_injection and traffic_growth) to measure agent
+      effectiveness — gives the talk real numbers instead of anecdotes.
+
+After the talk:
+
+- [ ] Multi-wave rollouts (5% → 25% → 100%) with per-wave verification.
+- [ ] Async rollout engine: bake time between waves, poll-based verification.
 - [ ] Implement `backends/adapters.py` against real backends and route the
       MCP query tools through them when `CTL_FLEET=opamp`.
-- [ ] Multi-wave rollouts (5% → 25% → 100%) with per-wave verification.
-- [ ] Web UI for the approval queue (replace/augment ctl).
 - [ ] Proposal expiry + dedup (agent shouldn't re-propose an open change).
-- [ ] Evaluations per mcp-builder practice: 10 read-only Q&A tasks against a
-      seeded fleet to measure agent effectiveness with these tools.
+- [ ] Open question: pre-approved change classes (e.g. raise sampling for a
+      declared incident, auto-expiring) — approved in guardrails.yaml, not by
+      the agent. Needs its own yaml knob, enforcement and tests.
+- [ ] Web UI for the approval queue (replace/augment ctl).
 
 ## Conventions
 
