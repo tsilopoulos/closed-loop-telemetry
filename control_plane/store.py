@@ -37,10 +37,39 @@ CREATE TABLE IF NOT EXISTS audit (
 class Store:
     def __init__(self, db_path: str | None = None):
         self.db_path = os.path.abspath(db_path or DEFAULT_DB_PATH)
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        self._db: sqlite3.Connection | None = None
+        self._inode: int | None = None
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """Connection to the DB file *currently* at db_path.
+
+        The MCP server is long-lived; if someone deletes .state/ under it
+        (`rm -rf .state`), a cached connection would keep writing to the
+        unlinked file (or fail read-only) and its proposals would never reach
+        `ctl`. Reconnect whenever the path no longer names the file we opened.
+        """
+        try:
+            inode = os.stat(self.db_path).st_ino
+        except FileNotFoundError:
+            inode = None
+        if self._db is None or inode != self._inode:
+            if self._db is not None:
+                self._db.close()
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            self._db = sqlite3.connect(self.db_path)
+            self._db.executescript(_SCHEMA)
+            self._db.commit()
+            self._inode = os.stat(self.db_path).st_ino
+        return self._db
+
+    def reset(self) -> None:
+        """Empty every table in place. Unlike deleting the file, this is seen
+        immediately by every process sharing the DB."""
+        conn = self._conn
+        with conn:
+            for table in ("proposals", "rollouts", "kv", "audit"):
+                conn.execute(f"DELETE FROM {table}")
 
     # -- generic helpers ----------------------------------------------------
 

@@ -10,6 +10,7 @@ rollout. The AI agent's MCP server has no equivalent.
     python3 -m cli.ctl rollback <rollout-id>
     python3 -m cli.ctl audit [--limit 30]
     python3 -m cli.ctl fleet [--reset]
+    python3 -m cli.ctl reset            # wipe proposals, rollouts, audit, fleet
 """
 
 from __future__ import annotations
@@ -135,6 +136,13 @@ def cmd_fleet(store: Store, fleet, args) -> None:
     print(f"series by service: {json.dumps(fleet.series_by_service())}")
 
 
+def cmd_reset(store: Store, fleet, args) -> None:
+    store.reset()
+    fleet.reset()
+    store.audit(_human(), "state.reset", {})
+    print("State reset: proposals, rollouts and audit cleared; fleet at baseline.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="ctl")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -148,6 +156,7 @@ def main() -> None:
     p = sub.add_parser("rollback"); p.add_argument("rollout_id")
     p = sub.add_parser("audit"); p.add_argument("--limit", type=int, default=30)
     p = sub.add_parser("fleet"); p.add_argument("--reset", action="store_true")
+    sub.add_parser("reset")
 
     args = ap.parse_args()
     store = Store()
@@ -167,6 +176,8 @@ def main() -> None:
         cmd_audit(store, args)
     elif args.cmd == "fleet":
         cmd_fleet(store, fleet, args)
+    elif args.cmd == "reset":
+        cmd_reset(store, fleet, args)
 
 
 if __name__ == "__main__":

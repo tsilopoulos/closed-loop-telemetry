@@ -14,8 +14,10 @@ test:
 demo:
 	$(PYTHON) -m scenarios.trigger cardinality_explosion --service checkout --label sku_id
 
+# Empties the DB in place rather than deleting it, so an already-running MCP
+# server (e.g. your Claude Code session) sees the reset immediately.
 reset:
-	rm -rf .state && $(PYTHON) -m cli.ctl fleet
+	$(PYTHON) -m cli.ctl reset && $(PYTHON) -m cli.ctl fleet
 
 mcp:
 	$(PYTHON) -m mcp_server.server
