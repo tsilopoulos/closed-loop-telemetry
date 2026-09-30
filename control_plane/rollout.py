@@ -93,8 +93,16 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
     ver_policy = policy.get("verification", {})
 
     canary_agents = [fleet.get_agent(aid) for aid in canaries]
-    all_healthy = all(a.healthy for a in canary_agents)
+    # What the agents themselves report over OpAMP: health, and whether they
+    # accepted the remote config (RemoteConfigStatus).
+    all_healthy = all(a.healthy and a.remote_config_status.get("status") == "APPLIED"
+                      for a in canary_agents)
     verification["all_canaries_healthy"] = all_healthy
+    failed_status = {a.agent_id: a.remote_config_status.get("error_message")
+                     for a in canary_agents
+                     if a.remote_config_status.get("status") != "APPLIED"}
+    if failed_status:
+        verification["remote_config_failed"] = failed_status
 
     after_canary_series = fleet.series_for_agents(canaries)
     verification["canary_series_before"] = before_canary_series

@@ -30,6 +30,8 @@ integration begins.
 |---|---|---|
 | Fleet | `SimulatedFleet` (60 agents, telemetry model) | OTel Collectors under an OpAMP control plane |
 | Actuation | in-memory config merge | `ServerToAgent.remote_config` push via the OpAMP server |
+| Agent feedback | `remote_config_status` (APPLIED/FAILED + collector error), `healthy`, config hash — same shape as OpAMP | `RemoteConfigStatus`, `ComponentHealth`, `EffectiveConfig` reported by the agent/supervisor |
+| Config validation | `collector_config_errors`: undefined processor refs, unknown component types | the collector itself (`otelcol validate` semantics) |
 | Metrics | model-derived series counts | PromQL via `backends.adapters.PromCompatibleMetrics` |
 | Logs | synthetic lines | SQL/HTTP via `backends.adapters.SQLLogs` |
 | Traces | not simulated | `backends.adapters.TraceSearch` |
