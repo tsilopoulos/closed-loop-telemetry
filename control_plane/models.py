@@ -55,14 +55,20 @@ class AgentInfo:
     config: dict[str, Any]  # effective collector-style config
     healthy: bool = True
     config_version: int = 1
-    previous_config: dict[str, Any] | None = None  # for rollback
+    # Stack of configs this agent had before each rollout touched it, newest
+    # last: [{"rollout_id", "config", "healthy"}]. A rollout can be rolled
+    # back on an agent only while it is the newest entry, so undoing an older
+    # rollout can never silently discard a newer one.
+    history: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "AgentInfo":
-        return AgentInfo(**d)
+        # Tolerate state written by older versions (e.g. `previous_config`).
+        known = AgentInfo.__dataclass_fields__
+        return AgentInfo(**{k: v for k, v in d.items() if k in known})
 
 
 @dataclass

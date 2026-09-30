@@ -351,6 +351,68 @@ def test_unwired_processor_has_no_effect(env):
     assert fleet.series_by_service()["checkout"] == before
 
 
+def _applied_rollout(env, name):
+    store, fleet = env
+    patch = {"processors": {f"transform/{name}": {"note": name}}}
+    p, verdict = _make_proposal(env, patch=patch, selector={"agent_ids": ["otelcol-0001"]})
+    assert verdict.allowed
+    return start_rollout(store, fleet, p.proposal_id, approver="human:tester")
+
+
+def test_rollback_of_older_rollout_is_refused(env):
+    """Undoing A after B must not silently discard B (it used to remove B)."""
+    from control_plane.rollout import manual_rollback
+    store, fleet = env
+    a, b = _applied_rollout(env, "a"), _applied_rollout(env, "b")
+    with pytest.raises(RolloutError, match=b.rollout_id):
+        manual_rollback(store, fleet, a.rollout_id, "human:tester")
+    procs = fleet.get_agent("otelcol-0001").config["processors"]
+    assert {"transform/a", "transform/b"} <= set(procs)
+
+
+def test_rollbacks_unwind_in_order(env):
+    from control_plane.rollout import manual_rollback
+    store, fleet = env
+    original = fleet.get_agent("otelcol-0001").config
+    a, b = _applied_rollout(env, "a"), _applied_rollout(env, "b")
+    manual_rollback(store, fleet, b.rollout_id, "human:tester")
+    assert "transform/b" not in fleet.get_agent("otelcol-0001").config["processors"]
+    manual_rollback(store, fleet, a.rollout_id, "human:tester")
+    assert fleet.get_agent("otelcol-0001").config == original
+
+
+def test_manual_rollback_state_checks(env):
+    from control_plane.rollout import manual_rollback
+    store, fleet = env
+    r = _applied_rollout(env, "a")
+    with pytest.raises(RolloutError, match="human"):
+        manual_rollback(store, fleet, r.rollout_id, "ai-agent:mcp")
+    manual_rollback(store, fleet, r.rollout_id, "human:tester")
+    with pytest.raises(RolloutError, match="only applied"):
+        manual_rollback(store, fleet, r.rollout_id, "human:tester")
+
+
+def test_approval_revalidates_against_current_fleet(env):
+    """The full policy runs again at approval, not just the stored verdict."""
+    store, fleet = env
+    p, verdict = _make_proposal(env, selector={"labels": {"region": "eu-west-1", "tier": "standard"}})
+    assert verdict.allowed
+    raw = store.get_kv("fleet")
+    for a in raw.values():
+        if a["labels"]["region"] == "eu-west-1":
+            a["labels"]["region"] = "moved"
+    store.put_kv("fleet", raw)
+    with pytest.raises(RolloutError, match="matches no agents"):
+        start_rollout(store, fleet, p.proposal_id, approver="human:tester")
+
+
+def test_agentinfo_reads_legacy_state():
+    from control_plane.models import AgentInfo
+    a = AgentInfo.from_dict({"agent_id": "x", "labels": {}, "config": {},
+                             "previous_config": {"old": True}})
+    assert a.history == []
+
+
 def test_audit_trail_records_everything(env):
     store, fleet = env
     p, _ = _make_proposal(env)
