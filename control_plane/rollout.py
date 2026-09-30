@@ -53,6 +53,7 @@ def start_rollout(store: Store, fleet, proposal_id: str, approver: str) -> Rollo
     recheck = validate_proposal(
         config_patch=proposal.config_patch, selector=proposal.selector,
         targets=matched, evidence=proposal.evidence, reason=proposal.reason,
+        receipts=store.get_receipt, as_of=proposal.created_at,
     )
     if not recheck.allowed:
         raise RolloutError("Proposal no longer passes policy: " + " ".join(recheck.reasons))

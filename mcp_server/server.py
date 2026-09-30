@@ -28,7 +28,7 @@ from pydantic import Field
 from typing_extensions import TypedDict
 
 from control_plane.fleet import get_fleet
-from control_plane.models import ConfigProposal
+from control_plane.models import ConfigProposal, EvidenceReceipt
 from control_plane.policy import validate_proposal
 from control_plane.store import Store
 
@@ -64,8 +64,20 @@ class Selector(TypedDict, total=False):
     all: bool
 
 
+class EvidenceItem(TypedDict):
+    receipt_id: str   # the evidence_receipt a read tool returned
+    observation: str  # what you concluded from it
+
+
 def _j(obj: Any) -> str:
     return json.dumps(obj, indent=2, default=str)
+
+
+def _evidenced(tool: str, args: dict[str, Any], payload: dict[str, Any]) -> str:
+    """Return a read tool's payload with a receipt for what was returned."""
+    r = EvidenceReceipt.issue(tool, args, json.dumps(payload, default=str))
+    _store.put_receipt(r.to_dict())
+    return _j({**payload, "evidence_receipt": r.receipt_id})
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +97,7 @@ def fleet_overview() -> str:
             c[v] = c.get(v, 0) + 1
         if not a.healthy:
             unhealthy.append(a.agent_id)
-    return _j({
+    return _evidenced("fleet_overview", {}, {
         "total_agents": len(agents),
         **{f"by_{k}": c for k, c in counts.items()},
         "unhealthy_agents": unhealthy,
@@ -106,12 +118,14 @@ def fleet_list_agents(env: str | None = None, region: str | None = None,
     if service:
         labels["service"] = service
     agents = _fleet.select({"labels": labels} if labels else {"all": True})
-    return _j([
-        {"agent_id": a.agent_id, "labels": a.labels,
-         "healthy": a.healthy, "config_version": a.config_version,
-         "remote_config_status": a.remote_config_status["status"]}
-        for a in agents[:limit]
-    ] + ([{"truncated": len(agents) - limit}] if len(agents) > limit else []))
+    return _evidenced("fleet_list_agents", {"labels": labels, "limit": limit}, {
+        "agents": [
+            {"agent_id": a.agent_id, "labels": a.labels,
+             "healthy": a.healthy, "config_version": a.config_version,
+             "remote_config_status": a.remote_config_status["status"]}
+            for a in agents[:limit]],
+        "truncated": max(0, len(agents) - limit),
+    })
 
 
 @mcp.tool(annotations=READ)
@@ -120,9 +134,10 @@ def fleet_get_config(agent_id: str) -> str:
     a = _fleet.get_agent(agent_id)
     if a is None:
         return _j({"error": f"No agent '{agent_id}'. Use fleet_list_agents first."})
-    return _j({"agent_id": a.agent_id, "config_version": a.config_version,
-               "healthy": a.healthy, "remote_config_status": a.remote_config_status,
-               "config": a.config})
+    return _evidenced("fleet_get_config", {"agent_id": agent_id}, {
+        "agent_id": a.agent_id, "config_version": a.config_version,
+        "healthy": a.healthy, "remote_config_status": a.remote_config_status,
+        "config": a.config})
 
 
 @mcp.tool(annotations=READ)
@@ -143,12 +158,16 @@ def query_metrics(metric: str = "active_series", group_by: str = "service",
         per_agent = sorted(
             ((a.agent_id, _fleet.series_for_agents([a.agent_id])) for a in _fleet.agents()),
             key=lambda x: -x[1])
-        return _j({"metric": metric, "top_agents": [
-            {"agent_id": aid, "active_series": n} for aid, n in per_agent[:10]]})
+        return _evidenced("query_metrics", {"metric": metric, "group_by": group_by}, {
+            "metric": metric, "top_agents": [
+                {"agent_id": aid, "active_series": n} for aid, n in per_agent[:10]]})
     window_minutes = max(1, min(window_minutes, 24 * 60))
     step_minutes = max(1, min(step_minutes, window_minutes))
-    return _j({"metric": metric, "group_by": "service",
-               "points": _fleet.series_history(window_minutes * 60, step_minutes * 60)})
+    args = {"metric": metric, "group_by": group_by,
+            "window_minutes": window_minutes, "step_minutes": step_minutes}
+    return _evidenced("query_metrics", args, {
+        "metric": metric, "group_by": "service",
+        "points": _fleet.series_history(window_minutes * 60, step_minutes * 60)})
 
 
 @mcp.tool(annotations=READ)
@@ -156,7 +175,8 @@ def query_logs(service: str | None = None, limit: int = 20) -> str:
     """Fetch recent log lines, optionally for one service. WARN/ERROR lines
     often name the label or upstream causing trouble — cite them as evidence.
     (Real deployment: this proxies to the logs backend; see backends/.)"""
-    return _j(_fleet.recent_logs(service=service, limit=limit))
+    return _evidenced("query_logs", {"service": service, "limit": limit},
+                      {"lines": _fleet.recent_logs(service=service, limit=limit)})
 
 
 @mcp.tool(annotations=READ)
@@ -207,8 +227,10 @@ def propose_config_change(
     config_patch: Annotated[dict[str, Any], Field(description=(
         "JSON merge patch onto the agent config. Only telemetry-shaping "
         "processors and pipeline processor lists (see get_guardrails)."))],
-    evidence: Annotated[list[str], Field(description=(
-        "The queries/observations that justify the change."))],
+    evidence: Annotated[list[EvidenceItem], Field(description=(
+        "What justifies the change: each item cites the `evidence_receipt` a "
+        "read tool returned, plus what you concluded from it. Include at "
+        "least one query_metrics or query_logs receipt."))],
 ) -> str:
     """Propose a fleet configuration change for HUMAN review. Nothing is
     applied by this tool, and you cannot approve it.
@@ -228,10 +250,11 @@ def propose_config_change(
     the patch and propose again; do not attempt to widen your access.
     """
     selector = dict(selector)
+    evidence = [dict(e) for e in evidence]
     targets = _fleet.select(selector)
     verdict = validate_proposal(
         config_patch=config_patch, selector=selector, targets=targets,
-        evidence=evidence, reason=reason,
+        evidence=evidence, reason=reason, receipts=_store.get_receipt,
     )
     proposal = ConfigProposal.create(
         author=AGENT_ACTOR, reason=reason, selector=selector,

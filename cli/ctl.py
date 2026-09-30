@@ -75,7 +75,17 @@ def cmd_approve(store: Store, fleet, args) -> None:
     print(f"  Reason:   {p['reason']}")
     print(f"  Selector: {json.dumps(p['selector'])}")
     print(f"  Patch:    {json.dumps(p['config_patch'])[:400]}")
-    print(f"  Evidence: {json.dumps(p['evidence'])[:400]}")
+    print("  Evidence (what the agent's queries actually returned):")
+    for item in p["evidence"]:
+        rid = item.get("receipt_id") if isinstance(item, dict) else None
+        r = store.get_receipt(rid) if rid else None
+        obs = item.get("observation", "") if isinstance(item, dict) else item
+        print(f"    - {obs}")
+        if r:
+            print(f"      receipt {rid}: {r['tool']}({json.dumps(r['args'])})")
+            print("      " + r["excerpt"][:300].replace("\n", "\n      "))
+        else:
+            print(f"      (no valid receipt: {rid!r})")
     # Typing part of the id (not "y") forces a look at *which* proposal.
     confirm = p["proposal_id"][-4:]
     answer = input(f"Type '{confirm}' to approve and start the canary rollout: ").strip()

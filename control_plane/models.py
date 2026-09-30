@@ -102,7 +102,9 @@ class ConfigProposal:
     reason: str  # natural-language justification, required
     selector: dict[str, Any]  # which agents this targets
     config_patch: dict[str, Any]  # JSON merge patch applied to agent config
-    evidence: list[str]  # telemetry queries / observations backing the change
+    # [{"receipt_id", "observation"}]: each cites a receipt the server issued
+    # when the agent actually ran a read tool (see EvidenceReceipt).
+    evidence: list[Any]
     status: str = "pending_approval"
     policy_verdict: dict[str, Any] | None = None
     decided_by: str | None = None
@@ -115,7 +117,7 @@ class ConfigProposal:
         reason: str,
         selector: dict[str, Any],
         config_patch: dict[str, Any],
-        evidence: list[str] | None = None,
+        evidence: list[Any] | None = None,
     ) -> "ConfigProposal":
         return ConfigProposal(
             proposal_id=new_id("prop"),
@@ -133,6 +135,28 @@ class ConfigProposal:
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "ConfigProposal":
         return ConfigProposal(**d)
+
+
+@dataclass
+class EvidenceReceipt:
+    """Issued by the MCP server every time the agent runs a read tool.
+
+    The agent can write whatever it likes in a proposal's `observation`; it
+    cannot forge a receipt. The receipt stores what the tool *actually*
+    returned, so the human approving sees the data, not the paraphrase."""
+
+    receipt_id: str
+    tool: str
+    args: dict[str, Any]
+    issued_at: float
+    excerpt: str  # the tool's output, truncated
+
+    @staticmethod
+    def issue(tool: str, args: dict[str, Any], output: str, limit: int = 4000) -> "EvidenceReceipt":
+        return EvidenceReceipt(new_id("ev"), tool, args, now(), output[:limit])
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
