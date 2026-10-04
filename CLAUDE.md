@@ -10,9 +10,14 @@ modeling an OpAMP-managed fleet.
 ## Architecture (30 seconds)
 
 - `mcp_server/server.py` — the ONLY surface the AI agent sees. Read tools +
-  one propose tool. **No apply/approve tool exists here, ever.**
-- `control_plane/policy.py` + `policy/guardrails.yaml` — validates proposals
-  at creation: path allowlist/denylist, evidence required, protected agents.
+  one propose tool. **No apply/approve tool exists here, ever.** It holds no
+  policy, store or fleet: every tool is a thin call to the agent API.
+- `control_plane/agent_api.py` — the control plane's agent-facing API (in
+  production a network service; in-process here). Serves reads, issues
+  evidence receipts, evaluates the guardrails on submit. No approve/rollout.
+- `control_plane/policy.py` + `policy/guardrails.yaml` — the guardrails. They
+  live in the control plane: evaluated by the agent API at proposal and again
+  by the rollout engine at approval, never in the agent tier.
 - `cli/ctl.py` — human approval CLI; the only path into the rollout engine.
 - `control_plane/rollout.py` — canary (≤5%) → verify → promote, auto-rollback.
 - `control_plane/fleet.py` — `SimulatedFleet` (default, zero infra) and the
@@ -29,6 +34,9 @@ modeling an OpAMP-managed fleet.
 2. `start_rollout` must reject non-human approvers (allowlist: `human:<name>`)
    and verdicts issued under a different guardrails.yaml than the current one.
 3. Every mutation goes through the policy engine and is audit-logged.
+   The policy lives in the control plane: the MCP server may import only
+   `control_plane.agent_api` (`test_mcp_server_holds_no_policy`), and the
+   agent API has no approve/rollout path (`test_agent_api_has_no_approval_path`).
 4. `policy/guardrails.yaml` changes are treated like production config review.
 5. Keep everything vendor-neutral at the protocol level (OTLP, OpAMP, MCP);
    backend-specific code lives only in `backends/` and `opamp_bridge.py`.

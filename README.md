@@ -84,7 +84,7 @@ python3 -m scenarios.trigger traffic_growth     # every service +30% from scale-
 
 ```
 mcp_server/       the agent-facing MCP server (stdio)
-control_plane/    models, store, policy, rollout engine, fleet, OpAMP bridge
+control_plane/    agent API, policy, rollout engine, models, store, fleet, OpAMP bridge
 cli/              ctl — human approval CLI
 policy/           guardrails.yaml — the reviewable agent contract
 scenarios/        demo perturbations (cardinality explosion, prompt injection, traffic growth, incident)
