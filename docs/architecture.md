@@ -37,6 +37,26 @@ integration begins.
 | Traces | not simulated | `backends.adapters.TraceSearch` |
 | Rollout timing | synchronous, sim time | async waves with bake periods |
 
+## Where the guardrails policy lives
+
+In the **control plane**, never in the agent tier.
+
+| Role | Where |
+|---|---|
+| Authored, reviewed | `policy/guardrails.yaml` in git (in production: its own repo, code owners, branch protection) |
+| Evaluated at proposal | `control_plane/agent_api.py` — the control plane's agent-facing API |
+| Re-evaluated at approval | `control_plane/rollout.py` — same policy hash required, full re-check against the live fleet |
+| Shown to the agent | `get_guardrails` → a read-only copy from the agent API, with its `policy_sha256` |
+
+The MCP server holds no policy, store or fleet handle; every tool is a thin
+call to `AgentAPI` (test-pinned). The agent API binds the caller's identity
+when it is constructed (`ai-agent:<name>`; in production from mTLS/workload
+identity, not from the request), issues evidence receipts for data it served
+itself, and has no approve, rollout or apply method. In this reference build
+it runs in-process for zero infrastructure; in production it is a network
+service next to the rollout engine and the MCP server is a client of it, so a
+compromised agent tier has no policy to edit and no verdict to forge.
+
 ## OpAMP bridge
 
 `control_plane/opamp_bridge.py` mirrors `SimulatedFleet`'s interface. Two

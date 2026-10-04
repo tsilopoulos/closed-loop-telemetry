@@ -331,13 +331,72 @@ def test_mcp_server_imports():
     import mcp_server.server  # noqa: F401
 
 
+def test_mcp_server_holds_no_policy():
+    """The guardrails live in the control plane. The agent-facing server may
+    talk to it only through control_plane.agent_api: no policy engine, store,
+    fleet, receipts or file reads of its own."""
+    import ast
+    import mcp_server.server as srv
+
+    tree = ast.parse(open(srv.__file__).read())
+    cp_imports = {n.module for n in ast.walk(tree)
+                  if isinstance(n, ast.ImportFrom) and n.module and n.module.startswith("control_plane")}
+    cp_imports |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import)
+                   for a in n.names if a.name.startswith("control_plane")}
+    assert cp_imports == {"control_plane.agent_api"}
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    assert not names & {"load_policy", "validate_proposal", "policy_fingerprint", "Store",
+                        "get_fleet", "EvidenceReceipt", "put_receipt", "put_proposal",
+                        "audit", "open"}
+
+
+def test_agent_api_has_no_approval_path():
+    """The control plane's agent API: reads, guardrails, and one submit. No
+    approve, rollout, apply or rollback, and no route to the rollout engine."""
+    import ast
+    import inspect
+    from control_plane import agent_api
+    from control_plane.agent_api import AgentAPI
+
+    public = {n for n, _ in inspect.getmembers(AgentAPI, inspect.isfunction) if not n.startswith("_")}
+    assert public == {"fleet_overview", "list_agents", "get_config", "query_metrics",
+                      "query_logs", "guardrails", "list_proposals", "get_proposal",
+                      "submit_proposal"}
+    tree = ast.parse(open(agent_api.__file__).read())
+    imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    assert not any(m and ("rollout" in m or m.startswith("cli")) for m in imported)
+    names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    names |= {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert not names & {"apply_patch", "rollback", "start_rollout", "manual_rollback",
+                        "getattr", "__import__", "import_module"}
+
+
+@pytest.mark.parametrize("principal", ["human:alice", "ai-agent:", "claude", ""])
+def test_agent_api_serves_only_agent_principals(env, principal):
+    """Identity is bound at the API, not claimed per request: the agent tier
+    can't author a proposal as a human."""
+    from control_plane.agent_api import AgentAPI
+    store, fleet = env
+    with pytest.raises(ValueError, match="agent principals"):
+        AgentAPI(store, fleet, principal=principal)
+
+
+def test_guardrails_view_is_the_enforced_policy(env, server):
+    """What the agent reads is the exact policy the control plane enforces."""
+    from control_plane.policy import load_policy, policy_fingerprint
+    g = _call(server, "get_guardrails", {})
+    assert g["policy_sha256"] == policy_fingerprint()
+    assert g["allowed_config_paths"] == load_policy()["allowed_config_paths"]
+
+
 @pytest.fixture()
 def server(env, monkeypatch):
     """The MCP server module wired to this test's store and fleet."""
     import mcp_server.server as srv
     store, fleet = env
-    monkeypatch.setattr(srv, "_store", store)
-    monkeypatch.setattr(srv, "_fleet", fleet)
+    from control_plane.agent_api import AgentAPI
+    monkeypatch.setattr(srv, "_api", AgentAPI(store, fleet))
     return srv
 
 
