@@ -1,4 +1,4 @@
-.PHONY: setup test demo reset mcp agent
+.PHONY: setup test demo reset mcp agent replay
 
 # Use the project venv by default; override with `make test PYTHON=python3`.
 # .mcp.json also points at .venv/bin/python, so run `make setup` once.
@@ -27,3 +27,8 @@ mcp:
 # guardrails.yaml. See .claude/agent-sandbox.json.
 agent:
 	claude --settings .claude/agent-sandbox.json --strict-mcp-config --mcp-config .mcp.json
+
+# Demo fallback without an LLM: scripted agent side over the real MCP tools,
+# then the real interactive `ctl approve`. Record it as the backup video.
+replay:
+	$(PYTHON) -m scenarios.replay

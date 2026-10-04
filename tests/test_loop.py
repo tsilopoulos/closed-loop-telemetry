@@ -686,3 +686,16 @@ def test_fleet_rebootstraps_after_reset(env):
     store, fleet = env
     store.reset()
     assert len(fleet.agents()) == 40
+
+
+def test_replay_fallback_reaches_pending_proposal(env, server):
+    """The no-LLM demo fallback drives the real MCP tools to a valid proposal."""
+    from scenarios import replay
+    store, fleet = env
+    fleet.set_scenario({"active": "cardinality_explosion", "service": "checkout",
+                        "label": "sku_id", "multiplier": 8.0})
+    pid = replay.agent_side(pause=False)
+    p = store.get_proposal(pid)
+    assert p["status"] == "pending_approval"
+    statuses = sorted(x["status"] for x in store.list_proposals())
+    assert statuses == ["pending_approval", "policy_rejected"]  # rejected, then narrowed
