@@ -3,14 +3,19 @@
 This CLI is deliberately the ONLY code path that can turn a proposal into a
 rollout. The AI agent's MCP server has no equivalent.
 
-    python3 -m cli.ctl list [--status pending_approval]
-    python3 -m cli.ctl show <proposal-id>
-    python3 -m cli.ctl approve <proposal-id> [--as you@example.com]   (interactive only)
-    python3 -m cli.ctl reject <proposal-id> --note "why"
-    python3 -m cli.ctl rollback <rollout-id>
-    python3 -m cli.ctl audit [--limit 30]
-    python3 -m cli.ctl fleet [--reset]
-    python3 -m cli.ctl reset            # wipe proposals, rollouts, audit, fleet
+Run it through make, which uses the project venv (`make setup` first):
+
+    make list [STATUS=pending_approval]
+    make show ID=<proposal-id>
+    make approve ID=<proposal-id>        # interactive only
+    make reject ID=<proposal-id> NOTE="why"
+    make rollback ID=<rollout-id>
+    make audit
+    make fleet
+    make reset                           # wipe proposals, rollouts, audit, fleet
+
+Directly: `.venv/bin/python -m cli.ctl <command> ...` (same arguments as above,
+e.g. `approve <proposal-id> [--as you@example.com]`).
 """
 
 from __future__ import annotations
@@ -21,11 +26,20 @@ import json
 import sys
 from datetime import datetime
 
-from control_plane.fleet import get_fleet
-from control_plane.models import now
-from control_plane.policy import policy_uncommitted
-from control_plane.rollout import RolloutError, manual_rollback, start_rollout
-from control_plane.store import Store
+try:
+    from control_plane.fleet import get_fleet
+    from control_plane.models import now
+    from control_plane.policy import policy_uncommitted
+    from control_plane.rollout import RolloutError, manual_rollback, start_rollout
+    from control_plane.store import Store
+except ModuleNotFoundError as e:  # e.g. system python3 without pyyaml
+    sys.exit(
+        f"ctl: missing Python package '{e.name}'. This Python ({sys.executable}) "
+        "doesn't have the project's dependencies.\n"
+        "Run `make setup` once, then use the make targets: `make list`, "
+        "`make show ID=<id>`, `make approve ID=<id>`, `make audit` "
+        "(or `source .venv/bin/activate` first)."
+    )
 
 
 def _ts(t: float) -> str:

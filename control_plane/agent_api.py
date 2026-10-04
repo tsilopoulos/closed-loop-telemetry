@@ -173,7 +173,9 @@ class AgentAPI:
             "matched_agents": len(targets) if verdict.allowed else 0,
             "next_step": (
                 "Awaiting human review. Tell the operator the proposal id; a human "
-                "approves it outside this toolset. Track it with get_proposal."
+                "approves it outside this toolset, in their own terminal: "
+                f"`make show ID={proposal.proposal_id}` then "
+                f"`make approve ID={proposal.proposal_id}`. Track it with get_proposal."
                 if verdict.allowed else
                 "Rejected by policy. Read the reasons, adjust, and re-propose."
             ),
