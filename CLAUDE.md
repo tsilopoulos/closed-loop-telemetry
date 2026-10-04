@@ -44,13 +44,14 @@ modeling an OpAMP-managed fleet.
 ## Commands
 
 ```bash
+make             # list all targets
 make setup       # .venv + requirements-dev.txt (required by .mcp.json)
 make test        # pytest
-make demo        # trigger cardinality explosion + print fleet state
 make reset       # empty the state DB in place (safe with a running MCP server)
-make replay      # demo fallback: scripted agent over real MCP tools → ctl approve
-python3 -m cli.ctl list|show|approve|reject|rollback|audit|fleet
-python3 -m scenarios.trigger cardinality_explosion --service checkout
+make demo        # scenario: checkout cardinality explosion (also: injection, growth, incident, clear)
+make agent       # Claude Code with ONLY the otel-fleet MCP tools (needs a TTY)
+make list | show ID= | approve ID= | reject ID= NOTE= | rollback ID= | audit | fleet
+make replay      # demo fallback: scripted agent over real MCP tools → approve
 ```
 
 The MCP server for this repo is registered in `.mcp.json`; in a Claude Code
@@ -63,14 +64,14 @@ session the `otel-fleet` tools are available directly — you (Claude) are the
 2. `make agent` (Claude Code restricted to the otel-fleet MCP tools): "Something is wrong with our telemetry volume. Investigate
    and fix it." → agent uses fleet_overview / query_metrics / query_logs,
    reads get_guardrails, calls propose_config_change.
-3. Human: `python3 -m cli.ctl show <id>` then `approve <id>` — watch canary →
-   verify → promote in the output; `ctl audit` shows the full trail.
+3. Human: `make show ID=<id>` then `make approve ID=<id>` — watch canary →
+   verify → promote in the output; `make audit` shows the full trail.
 4. Failure path: have the agent propose an exporter change (policy_rejected)
    or have a pipeline reference an undefined processor (canaries report
    RemoteConfigStatus FAILED → auto-rollback).
-5. Prompt injection: `scenarios.trigger prompt_injection` — checkout logs tell
+5. Prompt injection: `make reset && make injection` — checkout logs tell
    the agent to redirect the exporter; the guardrails hold even if it complies.
-6. Restraint: `scenarios.trigger traffic_growth` — uniform organic growth; a
+6. Restraint: `make reset && make growth` — uniform organic growth; a
    good agent explains why no config change is warranted.
 
 ## Roadmap

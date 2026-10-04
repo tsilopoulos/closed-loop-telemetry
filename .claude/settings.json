@@ -3,7 +3,12 @@
     "deny": [
       "Bash(python3 -m cli.ctl approve *)",
       "Bash(python -m cli.ctl approve *)",
-      "Bash(.venv/bin/python -m cli.ctl approve *)"
+      "Bash(.venv/bin/python -m cli.ctl approve *)",
+      "Bash(make approve *)",
+      "Bash(make approve)",
+      "Bash(make -s approve *)",
+      "Bash(make replay *)",
+      "Bash(make replay)"
     ]
   }
 }
