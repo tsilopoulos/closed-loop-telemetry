@@ -74,6 +74,10 @@ The agent is treated as a capable but untrusted operator:
 - It cannot touch ingestion or auth: `receivers`, `extensions` denylisted.
 - It cannot rewire or delete pipelines: only `service.pipelines.*.processors`
   is allowlisted, so `exporters: []` or `pipelines: null` is rejected.
+  The denylist backs this up independently of the allowlist: it also names
+  `service.pipelines.*.exporters` / `.receivers`, and writing an ancestor of a
+  denied path (`service: null`, replacing a whole pipeline) counts as touching
+  it, so a mistakenly widened allowlist still can't open these.
 - It cannot "fix" volume by deleting the signal: the baseline gate fails a
   canary where any service drops below half its pre-incident series.
 - It cannot go big fast: canary cap + verification + auto-rollback bound the

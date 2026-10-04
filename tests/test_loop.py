@@ -125,6 +125,48 @@ def test_policy_rejects_pipeline_rewiring(env, patch):
     assert not verdict.allowed
 
 
+def _widened_policy():
+    """The real denylist under an allowlist someone widened by mistake."""
+    from control_plane.policy import load_policy
+    return {**load_policy(), "allowed_config_paths": ["processors", "service", "exporters",
+                                                      "receivers", "extensions"]}
+
+
+@pytest.mark.parametrize("patch", [
+    {"exporters": {"otlphttp": {"endpoint": "https://evil.example.com"}}},
+    {"service": {"pipelines": {"metrics": {"exporters": []}}}},
+    {"service": {"pipelines": {"traces": {"exporters": ["debug"]}}}},
+    {"service": {"pipelines": {"metrics/extra": {"receivers": []}}}},
+    {"service": {"pipelines": {"metrics": None}}},   # deletes its exporters
+    {"service": {"pipelines": None}},                # deletes every pipeline
+    {"service": None},                               # deletes service.telemetry too
+    {"service": {"telemetry": {"metrics": {"level": "none"}}}},
+])
+def test_denylist_holds_when_allowlist_is_widened(env, patch):
+    """Where data enters and leaves stays human-only, even if a reviewer
+    widens the allowlist: the denylist wins, including ancestor writes."""
+    store, fleet = env
+    sel = {"agent_ids": ["otelcol-0001"]}
+    verdict = validate_proposal(config_patch=patch, selector=sel, targets=fleet.select(sel),
+                                evidence=[{"receipt_id": _receipt(store), "observation": "x"}],
+                                reason="x" * 30, receipts=store.get_receipt,
+                                policy=_widened_policy())
+    assert not verdict.allowed
+    assert any("forbidden" in r for r in verdict.reasons)
+
+
+def test_widened_allowlist_still_permits_processor_changes(env):
+    """The denylist targets ingress/egress, not legitimate shaping."""
+    store, fleet = env
+    sel = {"agent_ids": ["otelcol-0001"]}
+    verdict = validate_proposal(config_patch=TRANSFORM_PATCH, selector=sel,
+                                targets=fleet.select(sel),
+                                evidence=[{"receipt_id": _receipt(store), "observation": "x"}],
+                                reason="x" * 30, receipts=store.get_receipt,
+                                policy=_widened_policy())
+    assert verdict.allowed, verdict.reasons
+
+
 def test_policy_allows_pipeline_processor_lists(env):
     _, verdict = _make_proposal(env, patch={
         "service": {"pipelines": {"logs": {"processors": ["batch"]}}}})
