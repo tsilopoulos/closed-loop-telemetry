@@ -373,6 +373,21 @@ def test_mcp_server_imports():
     import mcp_server.server  # noqa: F401
 
 
+def test_ctl_without_dependencies_prints_a_hint():
+    """System python3 without pyyaml: a hint pointing at make, not a traceback."""
+    import subprocess
+    import sys
+    code = ("import sys; sys.modules['yaml'] = None; import runpy; "
+            "runpy.run_module('cli.ctl', run_name='__main__')")
+    root = os.path.join(os.path.dirname(__file__), "..")
+    r = subprocess.run([sys.executable, "-c", code, "list"], cwd=root,
+                       capture_output=True, text=True)
+    assert r.returncode == 1
+    assert "missing Python package 'yaml'" in r.stderr
+    assert "make setup" in r.stderr and "make approve ID=" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
 def test_mcp_server_holds_no_policy():
     """The guardrails live in the control plane. The agent-facing server may
     talk to it only through control_plane.agent_api: no policy engine, store,
