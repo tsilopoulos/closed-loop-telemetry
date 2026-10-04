@@ -16,11 +16,17 @@ allowed_config_paths:
                                      # and never deleting a pipeline
 
 # Hard denylist. Wins over the allowlist. "The line we refuse to let an AI cross."
+# It must hold even if the allowlist is later widened by mistake, so it names
+# where data enters and leaves *pipelines* too, not just the component
+# sections. Writing an ancestor of a denied path (e.g. `service: null`, or
+# replacing a whole pipeline) counts as touching it.
 forbidden_config_paths:
   - exporters          # never let an agent redirect telemetry
   - extensions         # auth, health, zpages — human-only
   - receivers          # ingestion surface — human-only
   - service.telemetry  # the collectors' own observability stays intact
+  - service.pipelines.*.exporters  # where each pipeline sends data
+  - service.pipelines.*.receivers  # what each pipeline ingests
 
 # JSON merge patch replaces lists wholesale; reject pipeline processor lists
 # that would silently drop processors the matched agents already run.

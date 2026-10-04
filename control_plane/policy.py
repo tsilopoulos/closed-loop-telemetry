@@ -83,6 +83,21 @@ def _path_matches(path: str, rule: str) -> bool:
     return all(r == "*" or p == r or p.startswith(r + "/") for p, r in zip(ps, rs))
 
 
+def _path_reaches(path: str, rule: str) -> bool:
+    """Does writing `path` touch what denylist `rule` protects?
+
+    Either the path is inside the rule's subtree, or it is an *ancestor* of
+    it: a patch path is a leaf (null, list, scalar), so writing an ancestor
+    replaces or deletes everything beneath it. `service: null` deletes
+    `service.telemetry`; `service.pipelines.metrics: null` deletes that
+    pipeline's exporters."""
+    if _path_matches(path, rule):
+        return True
+    ps, rs = path.split("."), rule.split(".")
+    return len(ps) < len(rs) and all(
+        r == "*" or p == r or p.startswith(r + "/") for p, r in zip(ps, rs))
+
+
 def protected_targets(targets: list[AgentInfo],
                       policy: dict[str, Any] | None = None) -> list[str]:
     """IDs of resolved agents carrying any protected label.
@@ -152,10 +167,11 @@ def validate_proposal(
     if not touched:
         reasons.append("Empty config patch: nothing to apply.")
 
-    # 1. Denylist wins over everything.
+    # 1. Denylist wins over everything, including writes to an ancestor that
+    #    would replace a protected subtree.
     for path in touched:
         for rule in policy.get("forbidden_config_paths", []):
-            if _path_matches(path, rule):
+            if _path_reaches(path, rule):
                 reasons.append(
                     f"Path '{path}' is forbidden by rule '{rule}'. "
                     "Exporters, extensions and auth surfaces are human-only."
